@@ -1,3 +1,7 @@
+"""
+PDF Report Generator for FFP Data Validator
+Author: Fayez Ahmed
+"""
 import os
 import uuid
 import pandas as pd
@@ -23,11 +27,13 @@ class ReportPDF(FPDF):
     def footer(self):
         self.set_y(-15)
         self.set_font("Nikosh", '', 8)
-        self.cell(0, 10, f"Page {self.page_no()}", align='C')
+        self.cell(0, 10, f"Page {self.page_no()}  |  Computer Network Unit, Directorate General of Food", align='C')
 
-def generate_pdf_report(df: pd.DataFrame, stats: dict, additional_columns: list = None, output_dir="downloads", original_filename: str = "") -> str:
+def generate_pdf_report(df: pd.DataFrame, stats: dict, additional_columns: list = None, output_dir="downloads", original_filename: str = "", geo: dict = None) -> str:
     if additional_columns is None:
         additional_columns = []
+    if geo is None:
+        geo = {"division": "Unknown", "district": "Unknown", "upazila": "Unknown"}
     
     os.makedirs(output_dir, exist_ok=True)
     filename = f"{original_filename}_validation_Report.pdf" if original_filename else f"report_{uuid.uuid4().hex[:8]}.pdf"
@@ -56,8 +62,14 @@ def generate_pdf_report(df: pd.DataFrame, stats: dict, additional_columns: list 
     pdf.set_font("Nikosh", '', 11)
     if original_filename:
         pdf.cell(0, 8, f"File Name:      {original_filename}", new_x="LMARGIN", new_y="NEXT")
+    # Geo info
+    pdf.cell(0, 8, f"Division:       {geo.get('division', 'Unknown')}", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 8, f"District:       {geo.get('district', 'Unknown')}", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 8, f"Upazila:        {geo.get('upazila', 'Unknown')}", new_x="LMARGIN", new_y="NEXT")
     pdf.cell(0, 8, f"Total Rows:     {stats['total_rows']}", new_x="LMARGIN", new_y="NEXT")
-    pdf.cell(0, 8, f"Total Errors:   {stats['issues']}", new_x="LMARGIN", new_y="NEXT")
+    valid_count = stats['total_rows'] - stats['issues']
+    pdf.cell(0, 8, f"Valid Rows:     {valid_count}", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 8, f"Invalid Rows:   {stats['issues']}", new_x="LMARGIN", new_y="NEXT")
     pdf.cell(0, 8, f"NIDs Converted: {stats['converted_nid']}", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(10)
     

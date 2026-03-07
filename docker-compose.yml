@@ -1,6 +1,18 @@
 version: '3.8'
 
 services:
+  db:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      - POSTGRES_USER=fayez
+      - POSTGRES_PASSWORD=fayez_secret
+      - POSTGRES_DB=ffp_validator
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app_network
+
   backend:
     build:
       context: ./backend
@@ -8,8 +20,12 @@ services:
       - "8000:8000"
     environment:
       - MAX_UPLOAD_SIZE=20971520 # 20MB
+      - DATABASE_URL=postgresql://fayez:fayez_secret@db:5432/ffp_validator
     volumes:
       - backend_downloads:/app/downloads
+      - backend_uploads:/app/uploads
+    depends_on:
+      - db
     networks:
       - app_network
 
@@ -18,8 +34,6 @@ services:
       context: ./frontend
     ports:
       - "3000:3000"
-    environment:
-      - NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
     depends_on:
       - backend
     networks:
@@ -27,6 +41,8 @@ services:
 
 volumes:
   backend_downloads:
+  backend_uploads:
+  postgres_data:
 
 networks:
   app_network:

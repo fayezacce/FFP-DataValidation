@@ -1,6 +1,7 @@
 {
   "name": "food-friendly-validator",
   "version": "0.1.0",
+  "author": "Fayez Ahmed",
   "private": true,
   "scripts": {
     "dev": "next dev",

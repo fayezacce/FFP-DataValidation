@@ -8,3 +8,5 @@ uharfbuzz>=0.39.0
 fonttools>=4.51.0
 pytest>=8.2.0
 xlrd>=2.0.1
+sqlalchemy
+psycopg2-binary
