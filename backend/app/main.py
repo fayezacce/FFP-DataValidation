@@ -50,16 +50,16 @@ async def validate_file(
     try:
         # header_row is 1-indexed from user perspective, pandas is 0-indexed
         if sheet_name and sheet_name.strip():
-            df = pd.read_excel(io.BytesIO(contents), sheet_name=sheet_name.strip(), header=header_row - 1)
+            df = pd.read_excel(io.BytesIO(contents), sheet_name=sheet_name.strip(), header=header_row - 1, dtype=str)
         else:
-            df = pd.read_excel(io.BytesIO(contents), header=header_row - 1)
+            df = pd.read_excel(io.BytesIO(contents), header=header_row - 1, dtype=str)
         # Drop rows where all name/dob/nid columns might be purely empty to avoid blank row issues
         # We will do this carefully or let process_dataframe handle it.
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to read Excel file: {str(e)}")
         
     try:
-        processed_df, stats = process_dataframe(df, dob_col=dob_column, nid_col=nid_column)
+        processed_df, stats = process_dataframe(df, dob_col=dob_column, nid_col=nid_column, header_row=header_row)
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
@@ -73,10 +73,14 @@ async def validate_file(
     pdf_path = generate_pdf_report(processed_df, stats, additional_columns=add_cols, original_filename=original_filename_no_ext)
     filename = os.path.basename(pdf_path)
     
-    # Generate Excel export
-    # Always output as .xlsx because pandas 2.2 no longer supports writing .xls via xlwt.
+    # Generate Excel exports
+    # 1) Full tested output coloring invalid/warnings
     excel_filename = f"{original_filename_no_ext}_validation_tested.xlsx"
     excel_path = os.path.join("downloads", excel_filename)
+    
+    # 2) Valid-only clean output with no color 
+    excel_valid_filename = f"{original_filename_no_ext}_valid_only.xlsx"
+    excel_valid_path = os.path.join("downloads", excel_valid_filename)
     
     red_fill = PatternFill(start_color='FFFFCCCC', end_color='FFFFCCCC', fill_type='solid') # light red
     yellow_fill = PatternFill(start_color='FFFFFF99', end_color='FFFFFF99', fill_type='solid') # light yellow
@@ -129,9 +133,11 @@ async def validate_file(
             status = row['Status']
             
             if dob_col_idx:
-                ws.cell(row=r, column=dob_col_idx, value=row['Cleaned_DOB'])
+                cell = ws.cell(row=r, column=dob_col_idx, value=row['Cleaned_DOB'])
+                cell.number_format = '@'
             if nid_col_idx:
-                ws.cell(row=r, column=nid_col_idx, value=row['Cleaned_NID'])
+                cell = ws.cell(row=r, column=nid_col_idx, value=row['Cleaned_NID'])
+                cell.number_format = '@'
             
             if status == 'error':
                 for c in range(1, ws.max_column + 1):
@@ -141,6 +147,37 @@ async def validate_file(
                     ws.cell(row=r, column=c).fill = yellow_fill
                     
         wb.save(excel_path)
+        
+        # Now create the valid-only output workbook.
+        # We start from the original unmodified workbook again:
+        wb_valid = openpyxl.load_workbook(io.BytesIO(contents))
+        if sheet_name and sheet_name.strip() in wb_valid.sheetnames:
+            ws_valid = wb_valid[sheet_name.strip()]
+        else:
+            ws_valid = wb_valid.active
+            
+        rows_to_delete = []
+        for idx, row in processed_df.iterrows():
+            r = int(row['Excel_Row'])
+            status = row['Status']
+            
+            if status == 'error':
+                rows_to_delete.append(r)
+            else:
+                # Add cleaned data back into it
+                if dob_col_idx:
+                    cell = ws_valid.cell(row=r, column=dob_col_idx, value=row['Cleaned_DOB'])
+                    cell.number_format = '@'
+                if nid_col_idx:
+                    cell = ws_valid.cell(row=r, column=nid_col_idx, value=row['Cleaned_NID'])
+                    cell.number_format = '@'
+                    
+        # Delete rows backward to not shift indexes
+        rows_to_delete.sort(reverse=True)
+        for r in rows_to_delete:
+            ws_valid.delete_rows(r)
+            
+        wb_valid.save(excel_valid_path)
     
     # Prepare preview data (first 50 rows to limit payload size)
     # Convert NaNs to None for JSON serialization
@@ -151,6 +188,7 @@ async def validate_file(
         "summary": stats,
         "pdf_url": f"/downloads/{filename}",
         "excel_url": f"/downloads/{excel_filename}",
+        "excel_valid_url": f"/downloads/{excel_valid_filename}",
         "preview_data": preview_data
     }
 

@@ -46,10 +46,11 @@ def clean_dob(value) -> tuple[str, str]:
         except ValueError:
             continue
             
-    # Maybe it's an Excel serial date as a string (e.g. "32874")
+    # Maybe it's an Excel serial date as a string (e.g. "32874" or "32874.0")
     try:
-        if val_str.isdigit() and 10000 <= int(val_str) <= 60000:
-            dt = pd.to_datetime('1899-12-30') + pd.to_timedelta(int(val_str), 'D')
+        clean_str = val_str[:-2] if val_str.endswith('.0') else val_str
+        if clean_str.isdigit() and 10000 <= int(clean_str) <= 60000:
+            dt = pd.to_datetime('1899-12-30') + pd.to_timedelta(int(clean_str), 'D')
             return dt.strftime("%Y-%m-%d"), str(dt.year)
     except Exception:
         pass
@@ -72,6 +73,7 @@ def validate_nid(nid_raw, dob_year) -> tuple[str, str, str]:
         return nid_str, "success", "Standard NID"
     elif len(nid_str) == 13:
         if dob_year:
+            # 13 digits convert to 17 by adding the birth year at the start.
             new_nid = f"{dob_year}{nid_str}"
             return new_nid, "warning", "Converted 13 to 17 digits"
         else:

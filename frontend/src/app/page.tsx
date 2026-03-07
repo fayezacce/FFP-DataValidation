@@ -21,6 +21,7 @@ export default function Home() {
     summary: { total_rows: number; issues: number; converted_nid: number };
     pdf_url: string;
     excel_url: string;
+    excel_valid_url: string;
     preview_data: any[];
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -426,7 +427,18 @@ export default function Home() {
                   className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2.5 rounded-lg font-medium flex items-center gap-2 transition-all shadow-lg shadow-blue-500/20"
                 >
                   <Download className="w-4 h-4" />
-                  Excel Result
+                  All Rows Excel
+                </a>
+                
+                <a 
+                  href={`${process.env.NEXT_PUBLIC_BACKEND_URL || `http://${window.location.hostname}:8000`}${results.excel_valid_url}`}
+                  download
+                  target="_blank"
+                  rel="noreferrer"
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-2.5 rounded-lg font-medium flex items-center gap-2 transition-all shadow-lg shadow-emerald-500/20"
+                >
+                  <Download className="w-4 h-4" />
+                  Valid Rows Only
                 </a>
                 
                 <a 
@@ -434,7 +446,7 @@ export default function Home() {
                   download
                   target="_blank"
                   rel="noreferrer"
-                  className="bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-2.5 rounded-lg font-medium flex items-center gap-2 transition-all shadow-lg shadow-emerald-500/20"
+                  className="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2.5 rounded-lg font-medium flex items-center gap-2 transition-all shadow-lg shadow-indigo-500/20"
                 >
                   <Download className="w-4 h-4" />
                   PDF Report

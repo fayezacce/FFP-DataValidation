@@ -11,18 +11,18 @@ class ReportPDF(FPDF):
         self.print_table_headers = False
 
     def header(self):
-        self.set_font("Arial", 'B', 16)
-        self.cell(0, 10, "Food Friendly Program Data Validation Report", ln=True, align='C')
+        self.set_font("Nikosh", '', 16)
+        self.cell(0, 10, "Food Friendly Program Data Validation Report", align='C', new_x="LMARGIN", new_y="NEXT")
         self.ln(5)
         if self.print_table_headers and self.show_cols and self.col_widths:
-            self.set_font("Arial", 'B', 9)
+            self.set_font("Nikosh", '', 9)
             for col, width in zip(self.show_cols, self.col_widths):
-                self.cell(width, 10, str(col).encode('latin-1', 'replace').decode('latin-1'), border=1, align='C')
+                self.cell(width, 10, str(col), border=1, align='C')
             self.ln()
 
     def footer(self):
         self.set_y(-15)
-        self.set_font("Arial", 'I', 8)
+        self.set_font("Nikosh", '', 8)
         self.cell(0, 10, f"Page {self.page_no()}", align='C')
 
 def generate_pdf_report(df: pd.DataFrame, stats: dict, additional_columns: list = None, output_dir="downloads", original_filename: str = "") -> str:
@@ -34,22 +34,35 @@ def generate_pdf_report(df: pd.DataFrame, stats: dict, additional_columns: list 
     filepath = os.path.join(output_dir, filename)
     
     pdf = ReportPDF('L', 'mm', 'A4')  # Landscape
+    
+    # Register Nikosh Font
+    font_path = os.path.join(os.path.dirname(__file__), "..", "Nikosh.ttf")
+    if os.path.exists(font_path):
+        pdf.add_font("Nikosh", "", font_path, uni=True)
+    else:
+        # Fallback if somehow missing
+        pdf.add_font("Nikosh", "", "C:\\Windows\\Fonts\\arial.ttf", uni=True)
+
+    # Enable Complex Text Layout rendering (e.g., for Bengali fonts)
+    if hasattr(pdf, 'set_text_shaping'):
+        pdf.set_text_shaping(True)
+
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
     
     # Summary Section
-    pdf.set_font("Arial", 'B', 12)
-    pdf.cell(0, 10, "Summary", ln=True)
-    pdf.set_font("Arial", '', 11)
+    pdf.set_font("Nikosh", '', 12)
+    pdf.cell(0, 10, "Summary", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Nikosh", '', 11)
     if original_filename:
-        pdf.cell(0, 8, f"File Name:      {original_filename}", ln=True)
-    pdf.cell(0, 8, f"Total Rows:     {stats['total_rows']}", ln=True)
-    pdf.cell(0, 8, f"Total Errors:   {stats['issues']}", ln=True)
-    pdf.cell(0, 8, f"NIDs Converted: {stats['converted_nid']}", ln=True)
+        pdf.cell(0, 8, f"File Name:      {original_filename}", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 8, f"Total Rows:     {stats['total_rows']}", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 8, f"Total Errors:   {stats['issues']}", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 8, f"NIDs Converted: {stats['converted_nid']}", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(10)
     
     # Table Header
-    pdf.set_font("Arial", 'B', 9)
+    pdf.set_font("Nikosh", '', 9)
     
     # Determine columns to show
     show_cols = ['Excel_Row', 'Cleaned_DOB', 'Cleaned_NID', 'Status', 'Message']
@@ -83,14 +96,14 @@ def generate_pdf_report(df: pd.DataFrame, stats: dict, additional_columns: list 
     pdf.col_widths = col_widths
     
     def print_headers():
-        pdf.set_font("Arial", 'B', 9)
+        pdf.set_font("Nikosh", '', 9)
         for col, width in zip(show_cols, col_widths):
-            pdf.cell(width, 10, str(col).encode('latin-1', 'replace').decode('latin-1'), border=1, align='C')
+            pdf.cell(width, 10, str(col), border=1, align='C')
         pdf.ln()
         
     print_headers()
     pdf.print_table_headers = True
-    pdf.set_font("Arial", '', 9)
+    pdf.set_font("Nikosh", '', 9)
     
     # Table Rows
     for idx, row in df.iterrows():
@@ -106,9 +119,8 @@ def generate_pdf_report(df: pd.DataFrame, stats: dict, additional_columns: list 
             
         for col, width in zip(show_cols, col_widths):
             val = str(row.get(col, ''))
-            val = val.encode('latin-1', 'replace').decode('latin-1')
             
-            # truncate long stings if needed to avoid spilling out
+            # truncate long strings if needed to avoid spilling out
             if len(val) > int(width):
                 val = val[:int(width)-1] + ".."
             pdf.cell(width, 8, val, border=1, align='L', fill=True)
