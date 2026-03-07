@@ -1,0 +1,77 @@
+backend-1  | INFO:     Started server process [1]
+backend-1  | INFO:     Waiting for application startup.
+backend-1  | INFO:     Application startup complete.
+backend-1  | INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+backend-1  | INFO:     172.18.0.1:42296 - "POST /validate HTTP/1.1" 500 Internal Server Error
+backend-1  | ERROR:    Exception in ASGI application
+backend-1  | Traceback (most recent call last):
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/pandas/io/excel/_base.py", line 1171, in __new__
+backend-1  |     engine = config.get_option(f"io.excel.{ext}.writer")
+backend-1  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/pandas/_config/config.py", line 187, in get_option
+backend-1  |     key = _get_single_key(pat)
+backend-1  |           ^^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/pandas/_config/config.py", line 131, in _get_single_key
+backend-1  |     raise OptionError(f"No such keys(s): {pat!r}")
+backend-1  | pandas.errors.OptionError: No such keys(s): 'io.excel.xls.writer'
+backend-1  | 
+backend-1  | The above exception was the direct cause of the following exception:
+backend-1  | 
+backend-1  | Traceback (most recent call last):
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/uvicorn/protocols/http/httptools_impl.py", line 416, in run_asgi
+backend-1  |     result = await app(  # type: ignore[func-returns-value]
+backend-1  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+backend-1  |     return await self.app(scope, receive, send)
+backend-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/fastapi/applications.py", line 1160, in __call__
+backend-1  |     await super().__call__(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/applications.py", line 107, in __call__
+backend-1  |     await self.middleware_stack(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/middleware/errors.py", line 186, in __call__
+backend-1  |     raise exc
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
+backend-1  |     await self.app(scope, receive, _send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/middleware/cors.py", line 95, in __call__
+backend-1  |     await self.simple_response(scope, receive, send, request_headers=headers)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/middleware/cors.py", line 153, in simple_response
+backend-1  |     await self.app(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+backend-1  |     await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+backend-1  |     raise exc
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+backend-1  |     await app(scope, receive, sender)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+backend-1  |     await self.app(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/routing.py", line 716, in __call__
+backend-1  |     await self.middleware_stack(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/routing.py", line 736, in app
+backend-1  |     await route.handle(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/routing.py", line 290, in handle
+backend-1  |     await self.app(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/fastapi/routing.py", line 130, in app
+backend-1  |     await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+backend-1  |     raise exc
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+backend-1  |     await app(scope, receive, sender)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/fastapi/routing.py", line 116, in app
+backend-1  |     response = await f(request)
+backend-1  |                ^^^^^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/fastapi/routing.py", line 670, in app
+backend-1  |     raw_response = await run_endpoint_function(
+backend-1  |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/fastapi/routing.py", line 324, in run_endpoint_function
+backend-1  |     return await dependant.call(**values)
+backend-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/app/app/main.py", line 92, in validate_file
+backend-1  |     processed_df[final_export_cols].to_excel(excel_path, index=False)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/pandas/core/generic.py", line 2312, in to_excel
+backend-1  |     formatter.write(
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/pandas/io/formats/excel.py", line 1003, in write
+backend-1  |     writer = ExcelWriter(
+backend-1  |              ^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/pandas/io/excel/_base.py", line 1175, in __new__
+backend-1  |     raise ValueError(f"No engine for filetype: '{ext}'") from err
+backend-1  | ValueError: No engine for filetype: 'xls'

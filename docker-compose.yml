@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - MAX_UPLOAD_SIZE=20971520 # 20MB
+    volumes:
+      - backend_downloads:/app/downloads
+    networks:
+      - app_network
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
+    depends_on:
+      - backend
+    networks:
+      - app_network
+
+volumes:
+  backend_downloads:
+
+networks:
+  app_network:
+    driver: bridge

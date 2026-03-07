@@ -1,0 +1,100 @@
+backend-1  |     value = np_can_hold_element(arr.dtype, value)
+backend-1  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/pandas/core/dtypes/cast.py", line 1750, in np_can_hold_element
+backend-1  |     raise LossySetitemError
+backend-1  | pandas.errors.LossySetitemError
+backend-1  | 
+backend-1  | During handling of the above exception, another exception occurred:
+backend-1  | 
+backend-1  | Traceback (most recent call last):
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/pandas/core/internals/blocks.py", line 1115, in setitem
+backend-1  |     casted = np_can_hold_element(values.dtype, value)
+backend-1  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/pandas/core/dtypes/cast.py", line 1750, in np_can_hold_element
+backend-1  |     raise LossySetitemError
+backend-1  | pandas.errors.LossySetitemError
+backend-1  | 
+backend-1  | During handling of the above exception, another exception occurred:
+backend-1  | 
+backend-1  | Traceback (most recent call last):
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/uvicorn/protocols/http/httptools_impl.py", line 416, in run_asgi
+backend-1  |     result = await app(  # type: ignore[func-returns-value]
+backend-1  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+backend-1  |     return await self.app(scope, receive, send)
+backend-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/fastapi/applications.py", line 1160, in __call__
+backend-1  |     await super().__call__(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/applications.py", line 107, in __call__
+backend-1  |     await self.middleware_stack(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/middleware/errors.py", line 186, in __call__
+backend-1  |     raise exc
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
+backend-1  |     await self.app(scope, receive, _send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/middleware/cors.py", line 95, in __call__
+backend-1  |     await self.simple_response(scope, receive, send, request_headers=headers)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/middleware/cors.py", line 153, in simple_response
+backend-1  |     await self.app(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+backend-1  |     await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+backend-1  |     raise exc
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+backend-1  |     await app(scope, receive, sender)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+backend-1  |     await self.app(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/routing.py", line 716, in __call__
+backend-1  |     await self.middleware_stack(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/routing.py", line 736, in app
+backend-1  |     await route.handle(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/routing.py", line 290, in handle
+backend-1  |     await self.app(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/fastapi/routing.py", line 130, in app
+backend-1  |     await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+backend-1  |     raise exc
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+backend-1  |     await app(scope, receive, sender)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/fastapi/routing.py", line 116, in app
+backend-1  |     response = await f(request)
+backend-1  |                ^^^^^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/fastapi/routing.py", line 670, in app
+backend-1  |     raw_response = await run_endpoint_function(
+backend-1  |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/fastapi/routing.py", line 324, in run_endpoint_function
+backend-1  |     return await dependant.call(**values)
+backend-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/app/app/main.py", line 88, in validate_file
+backend-1  |     processed_df.at[idx, nid_column] = row['Cleaned_NID']
+backend-1  |     ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/pandas/core/indexing.py", line 2592, in __setitem__
+backend-1  |     return super().__setitem__(key, value)
+backend-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/pandas/core/indexing.py", line 2542, in __setitem__
+backend-1  |     self.obj._set_value(*key, value=value, takeable=self._takeable)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/pandas/core/frame.py", line 4922, in _set_value
+backend-1  |     self.loc[index, col] = value
+backend-1  |     ~~~~~~~~^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/pandas/core/indexing.py", line 938, in __setitem__
+backend-1  |     iloc._setitem_with_indexer(indexer, value, self.name)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/pandas/core/indexing.py", line 1953, in _setitem_with_indexer
+backend-1  |     self._setitem_with_indexer_split_path(indexer, value, name)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/pandas/core/indexing.py", line 2044, in _setitem_with_indexer_split_path
+backend-1  |     self._setitem_single_column(loc, value, pi)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/pandas/core/indexing.py", line 2181, in _setitem_single_column
+backend-1  |     self.obj._mgr.column_setitem(loc, plane_indexer, value)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/pandas/core/internals/managers.py", line 1520, in column_setitem
+backend-1  |     new_mgr = col_mgr.setitem((idx,), value)
+backend-1  |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/pandas/core/internals/managers.py", line 604, in setitem
+backend-1  |     return self.apply("setitem", indexer=indexer, value=value)
+backend-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/pandas/core/internals/managers.py", line 442, in apply
+backend-1  |     applied = getattr(b, f)(**kwargs)
+backend-1  |               ^^^^^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/pandas/core/internals/blocks.py", line 1118, in setitem
+backend-1  |     nb = self.coerce_to_target_dtype(value, raise_on_upcast=True)
+backend-1  |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/pandas/core/internals/blocks.py", line 468, in coerce_to_target_dtype
+backend-1  |     raise TypeError(f"Invalid value '{other}' for dtype '{self.values.dtype}'")
+backend-1  | TypeError: Invalid value '8203314664' for dtype 'int64'

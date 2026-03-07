@@ -1,0 +1,50 @@
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+backend-1  |     await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+backend-1  |     raise exc
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+backend-1  |     await app(scope, receive, sender)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+backend-1  |     await self.app(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/routing.py", line 716, in __call__
+backend-1  |     await self.middleware_stack(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/routing.py", line 736, in app
+backend-1  |     await route.handle(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/routing.py", line 290, in handle
+backend-1  |     await self.app(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/fastapi/routing.py", line 130, in app
+backend-1  |     await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+backend-1  |     raise exc
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+backend-1  |     await app(scope, receive, sender)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/fastapi/routing.py", line 116, in app
+backend-1  |     response = await f(request)
+backend-1  |                ^^^^^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/fastapi/routing.py", line 670, in app
+backend-1  |     raw_response = await run_endpoint_function(
+backend-1  |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/fastapi/routing.py", line 324, in run_endpoint_function
+backend-1  |     return await dependant.call(**values)
+backend-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/app/app/main.py", line 73, in validate_file
+backend-1  |     pdf_path = generate_pdf_report(processed_df, stats, additional_columns=add_cols, original_filename=original_filename_no_ext)
+backend-1  |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/app/app/pdf_generator.py", line 76, in generate_pdf_report
+backend-1  |     print_headers()
+backend-1  |   File "/app/app/pdf_generator.py", line 73, in print_headers
+backend-1  |     pdf.cell(width, 10, str(col), border=1, align='C')
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/fpdf/fpdf.py", line 281, in wrapper
+backend-1  |     return fn(*args, **kwargs)
+backend-1  |            ^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/fpdf/deprecation.py", line 36, in wrapper
+backend-1  |     return fn(*args, **kwargs)
+backend-1  |            ^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/fpdf/fpdf.py", line 3910, in cell
+backend-1  |     text = self.normalize_text(text)
+backend-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/fpdf/fpdf.py", line 5683, in normalize_text
+backend-1  |     raise FPDFUnicodeEncodingException(
+backend-1  | fpdf.errors.FPDFUnicodeEncodingException: Character "ক" at index 0 in text is outside the range of characters supported by the font used: "helveticaB". Please consider using a Unicode font.
+backend-1  | INFO:     172.18.0.1:54826 - "POST /validate HTTP/1.1" 200 OK
+backend-1  | INFO:     172.18.0.1:54832 - "GET /downloads/Sunamganj_Derai%20Updated_validation_tested.xlsx HTTP/1.1" 200 OK
