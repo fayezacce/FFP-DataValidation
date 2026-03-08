@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
-import { BarChart3, ArrowLeft, RefreshCw, MapPin, Clock, Hash, FileSpreadsheet, CheckCircle2, FileWarning, FileText, Printer, Edit2, X, Save, Search } from "lucide-react";
+import { BarChart3, ArrowLeft, RefreshCw, MapPin, Clock, Hash, FileSpreadsheet, CheckCircle2, FileWarning, FileText, Printer, Edit2, X, Save, Search, Download } from "lucide-react";
 
 interface StatsEntry {
   division: string;
@@ -37,6 +37,10 @@ export default function StatisticsPage() {
   const [savingEdit, setSavingEdit] = useState(false);
 
   const getDownloadUrl = (path: string) => path;
+
+  const handleDownloadAllValid = () => {
+    window.location.href = "/api/downloads/valid-zip";
+  };
 
   const openEditModal = (entry: StatsEntry) => {
     setEditingEntry(entry);
@@ -166,6 +170,14 @@ export default function StatisticsPage() {
               <Search className="w-4 h-4" />
               <span>Search Records</span>
             </Link>
+            <button
+              onClick={handleDownloadAllValid}
+              disabled={loading || !data || data.entries.every(e => !e.excel_valid_url)}
+              className="bg-emerald-600 hover:bg-emerald-500 border border-emerald-500 text-white px-4 py-2 rounded-lg font-medium flex items-center gap-2 transition-all text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Download className="w-4 h-4" />
+              Download All Valid
+            </button>
             <button
               onClick={() => window.print()}
               disabled={loading}

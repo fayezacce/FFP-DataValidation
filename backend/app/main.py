@@ -23,6 +23,8 @@ from .validator import process_dataframe
 from .pdf_generator import generate_pdf_report
 from .bd_geo import fuzzy_match_location, get_division_for_district
 import urllib.parse
+import zipfile
+import tempfile
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -471,6 +473,52 @@ async def validate_file(
         "excel_invalid_url": f"/downloads/{urllib.parse.quote(excel_invalid_filename)}",
         "preview_data": preview_data
     }
+
+@app.get("/downloads/valid-zip")
+async def download_all_valid_zip(db: Session = Depends(get_db)):
+    """Create a zip archive containing all valid Excel files and return it."""
+    entries = db.query(SummaryStats).filter(SummaryStats.excel_valid_url != "").all()
+    
+    if not entries:
+        raise HTTPException(status_code=404, detail="No valid Excel files found to download")
+        
+    # Create a temporary file to store the zip
+    tmp_dir = "downloads" # Keep it in the downloads dir for ease
+    os.makedirs(tmp_dir, exist_ok=True)
+    zip_filename = f"all_valid_files_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+    zip_path = os.path.join(tmp_dir, zip_filename)
+    
+    try:
+        with zipfile.ZipFile(zip_path, 'w') as zipf:
+            for entry in entries:
+                # excel_valid_url is like "/downloads/Filename_valid.xlsx"
+                # We need the local path
+                filename = urllib.parse.unquote(os.path.basename(entry.excel_valid_url))
+                local_file_path = os.path.join("downloads", filename)
+                
+                if os.path.exists(local_file_path):
+                    # Naming convention: Division_District_upazila_valid.xlsx
+                    # Replace spaces and special chars with underscores
+                    div = str(entry.division or "Unknown").replace(" ", "_")
+                    dist = str(entry.district or "Unknown").replace(" ", "_")
+                    upz = str(entry.upazila or "Unknown").replace(" ", "_")
+                    
+                    zip_entry_name = f"{div}_{dist}_{upz}_valid.xlsx"
+                    zipf.write(local_file_path, arcname=zip_entry_name)
+        
+        if os.path.getsize(zip_path) == 0:
+            os.remove(zip_path)
+            raise HTTPException(status_code=404, detail="Zip file is empty")
+            
+        return FileResponse(
+            zip_path, 
+            media_type="application/zip", 
+            filename="All_Valid_Files.zip"
+        )
+    except Exception as e:
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
+        raise HTTPException(status_code=500, detail=f"Failed to create zip: {str(e)}")
 
 @app.get("/downloads/{filename}")
 async def download_file(filename: str):
