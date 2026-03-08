@@ -31,14 +31,38 @@ async def lifespan(app: FastAPI):
     # Create tables
     Base.metadata.create_all(bind=engine)
     
-    # Run migration
+    # Run safe column migration (add last_upload_* columns if they don't exist)
     from .database import SessionLocal
     db = SessionLocal()
     try:
+        migrate_schema(db)
         migrate_json_to_db(db)
     finally:
         db.close()
     yield
+
+def migrate_schema(db: Session):
+    """Safely add any missing columns to summary_stats table."""
+    from sqlalchemy import text
+    new_columns = [
+        ("last_upload_total", "INTEGER DEFAULT 0"),
+        ("last_upload_valid", "INTEGER DEFAULT 0"),
+        ("last_upload_invalid", "INTEGER DEFAULT 0"),
+        ("last_upload_new", "INTEGER DEFAULT 0"),
+        ("last_upload_updated", "INTEGER DEFAULT 0"),
+        ("last_upload_duplicate", "INTEGER DEFAULT 0"),
+        ("excel_valid_url", "VARCHAR"),
+        ("excel_invalid_url", "VARCHAR"),
+    ]
+    for col_name, col_def in new_columns:
+        try:
+            db.execute(text(
+                f"ALTER TABLE summary_stats ADD COLUMN IF NOT EXISTS {col_name} {col_def}"
+            ))
+            db.commit()
+        except Exception:
+            db.rollback()
+
 
 def migrate_json_to_db(db: Session):
     stats_file = os.path.join("downloads", "validation_stats.json")
@@ -131,15 +155,17 @@ async def validate_file(
             "district": district.strip(),
             "upazila": upazila.strip()
         }
+    elif district and upazila:
+        # Division not provided but district+upazila are
+        from .bd_geo import get_division_for_district
+        geo = {
+            "division": get_division_for_district(district.strip()),
+            "district": district.strip(),
+            "upazila": upazila.strip()
+        }
     else:
         geo = fuzzy_match_location(file.filename)
-        # If user didn't provide and fuzzy match failed
-        if geo["district"] == "Unknown" or geo["upazila"] == "Unknown":
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Invalid filename Format and no location selected. Could not detect a valid District and Upazila in '{file.filename}'. "
-                    f"Please either select the location manually or rename the file to 'District_Upazila.xlsx' format."
-            )
+        # If fuzzy match failed, use Unknown — don't block the user from validating
 
     try:
         if sheet_name and sheet_name.strip():
