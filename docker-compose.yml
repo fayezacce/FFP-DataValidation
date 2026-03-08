@@ -20,6 +20,7 @@ services:
     environment:
       - MAX_UPLOAD_SIZE=20971520 # 20MB
       - DATABASE_URL=postgresql://fayez:fayez_secret@db:5432/ffp_validator
+      - JWT_SECRET=supersecretkeyforffpdatavalidator2024
     volumes:
       - backend_downloads:/app/downloads
       - backend_uploads:/app/uploads

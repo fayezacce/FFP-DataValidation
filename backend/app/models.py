@@ -1,6 +1,18 @@
-from sqlalchemy import Column, Integer, String, DateTime, Float, Index, JSON, UniqueConstraint
+from sqlalchemy import Column, Integer, String, DateTime, Float, Index, JSON, UniqueConstraint, Boolean
 from .database import Base
 from datetime import datetime
+
+class User(Base):
+    __tablename__ = "users"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    role = Column(String, default="viewer")  # admin | uploader | viewer
+    is_active = Column(Boolean, default=True)
+    api_key = Column(String, unique=True, index=True, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 
 class SummaryStats(Base):
     __tablename__ = "summary_stats"

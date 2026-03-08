@@ -1,8 +1,10 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { BarChart3, ArrowLeft, RefreshCw, MapPin, Clock, Hash, FileSpreadsheet, CheckCircle2, FileWarning, FileText, Printer, Edit2, X, Save, Search } from "lucide-react";
+import { BarChart3, ArrowLeft, RefreshCw, MapPin, Clock, Hash, FileSpreadsheet, CheckCircle2, FileWarning, FileText, Printer, Edit2, X, Save, Search as SearchIcon, Download } from "lucide-react";
+import { fetchWithAuth, getBackendUrl, downloadFileWithAuth, isAuthenticated } from "@/lib/auth";
 
 interface StatsEntry {
   division: string;
@@ -30,13 +32,19 @@ export default function StatisticsPage() {
   const [data, setData] = useState<StatsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!isAuthenticated()) {
+      router.push("/login?callback=/statistics");
+    }
+  }, [router]);
 
   // Edit State
   const [editingEntry, setEditingEntry] = useState<StatsEntry | null>(null);
   const [editForm, setEditForm] = useState({ old_district: "", old_upazila: "", district: "", upazila: "", total: 0, valid: 0, invalid: 0 });
   const [savingEdit, setSavingEdit] = useState(false);
 
-  const getDownloadUrl = (path: string) => path;
 
   const openEditModal = (entry: StatsEntry) => {
     setEditingEntry(entry);
@@ -55,7 +63,7 @@ export default function StatisticsPage() {
     if (!editingEntry) return;
     setSavingEdit(true);
     try {
-      const res = await fetch(`/api/statistics/update`, {
+      const res = await fetchWithAuth(`${getBackendUrl()}/statistics/update`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -86,7 +94,7 @@ export default function StatisticsPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/statistics`);
+      const res = await fetchWithAuth(`${getBackendUrl()}/statistics`);
       if (!res.ok) throw new Error("Failed to load statistics");
       const json = await res.json();
       setData(json);
@@ -163,7 +171,7 @@ export default function StatisticsPage() {
               href="/search"
               className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600/20 border border-indigo-500/30 text-indigo-400 hover:bg-indigo-600/30 transition-all font-medium"
             >
-              <Search className="w-4 h-4" />
+              <SearchIcon className="w-4 h-4" />
               <span>Search Records</span>
             </Link>
             <button
@@ -291,27 +299,43 @@ export default function StatisticsPage() {
                                 </span>
                               </td>
                               <td className="px-5 py-3 text-center">
-                                <div className="flex items-center justify-center gap-2">
-                                  {entry.excel_url && (
-                                    <a href={getDownloadUrl(entry.excel_url)} title="Download All Rows (Processed)" download className="p-1.5 rounded-md bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 active:bg-blue-500/30 transition-colors border border-blue-500/20">
+                                <div className="flex items-center justify-center gap-2">                                   {entry.excel_url && (
+                                    <button 
+                                      onClick={() => downloadFileWithAuth(entry.excel_url!, "stats_all.xlsx")}
+                                      title="Download All Rows (Processed)" 
+                                      className="p-1.5 rounded-md bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 active:bg-blue-500/30 transition-colors border border-blue-500/20"
+                                    >
                                       <FileSpreadsheet className="w-4 h-4" />
-                                    </a>
+                                    </button>
                                   )}
                                   {entry.excel_valid_url && entry.valid > 0 && (
-                                    <a href={getDownloadUrl(entry.excel_valid_url)} title="Download Valid Rows" download className="p-1.5 rounded-md bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 active:bg-emerald-500/30 transition-colors border border-emerald-500/20">
+                                    <button 
+                                      onClick={() => downloadFileWithAuth(entry.excel_valid_url!, "stats_valid.xlsx")}
+                                      title="Download Valid Rows" 
+                                      className="p-1.5 rounded-md bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 active:bg-emerald-500/30 transition-colors border border-emerald-500/20"
+                                    >
                                       <CheckCircle2 className="w-4 h-4" />
-                                    </a>
+                                    </button>
                                   )}
                                   {entry.excel_invalid_url && entry.invalid > 0 && (
-                                    <a href={getDownloadUrl(entry.excel_invalid_url)} title="Download Invalid Rows" download className="p-1.5 rounded-md bg-red-500/10 text-red-400 hover:bg-red-500/20 active:bg-red-500/30 transition-colors border border-red-500/20">
+                                    <button 
+                                      onClick={() => downloadFileWithAuth(entry.excel_invalid_url!, "stats_invalid.xlsx")}
+                                      title="Download Invalid Rows" 
+                                      className="p-1.5 rounded-md bg-red-500/10 text-red-400 hover:bg-red-500/20 active:bg-red-500/30 transition-colors border border-red-500/20"
+                                    >
                                       <FileWarning className="w-4 h-4" />
-                                    </a>
+                                    </button>
                                   )}
                                   {entry.pdf_url && (
-                                    <a href={getDownloadUrl(entry.pdf_url!)} title="Download PDF Summary" download className="p-1.5 rounded-md bg-amber-500/10 text-amber-500 hover:bg-amber-500/20 active:bg-amber-500/30 transition-colors border border-amber-500/20">
+                                    <button 
+                                      onClick={() => downloadFileWithAuth(entry.pdf_url!, "stats_report.pdf")}
+                                      title="Download PDF Summary" 
+                                      className="p-1.5 rounded-md bg-amber-500/10 text-amber-500 hover:bg-amber-500/20 active:bg-amber-500/30 transition-colors border border-amber-500/20"
+                                    >
                                       <FileText className="w-4 h-4" />
-                                    </a>
+                                    </button>
                                   )}
+
                                   <div className="w-px h-5 bg-slate-700/50 mx-1 print:hidden" />
                                   <button onClick={() => openEditModal(entry)} title="Manual Edit" className="p-1.5 rounded-md bg-slate-500/10 text-slate-400 hover:bg-slate-500/20 hover:text-slate-200 transition-colors border border-slate-500/20 print:hidden">
                                     <Edit2 className="w-4 h-4" />

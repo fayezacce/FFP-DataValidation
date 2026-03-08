@@ -1,8 +1,10 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, Search as SearchIcon, Database, MapPin, Clock, FileText, User, Hash, Trash2, AlertTriangle, X, ChevronDown } from "lucide-react";
+import { fetchWithAuth, getBackendUrl, isAuthenticated } from "@/lib/auth";
 
 interface ValidRecord {
   id: number;
@@ -28,6 +30,13 @@ export default function SearchPage() {
   const [selectedRecord, setSelectedRecord] = useState<ValidRecord | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<ValidRecord | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!isAuthenticated()) {
+      router.push("/login?callback=/search");
+    }
+  }, [router]);
 
 
   const handleSearch = async (e?: React.FormEvent) => {
@@ -37,7 +46,7 @@ export default function SearchPage() {
     setLoading(true);
     setSearched(true);
     try {
-      const res = await fetch(`/api/search?query=${encodeURIComponent(query.trim())}&type=${searchType}`);
+      const res = await fetchWithAuth(`${getBackendUrl()}/search?query=${encodeURIComponent(query.trim())}&type=${searchType}`);
       if (!res.ok) throw new Error("Search failed");
       const data = await res.json();
       setResults(data);
@@ -52,7 +61,7 @@ export default function SearchPage() {
   const handleDelete = async (record: ValidRecord) => {
     setDeleting(true);
     try {
-      const res = await fetch(`/api/record/${record.id}`, { method: "DELETE" });
+      const res = await fetchWithAuth(`${getBackendUrl()}/record/${record.id}`, { method: "DELETE" });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || "Delete failed");
