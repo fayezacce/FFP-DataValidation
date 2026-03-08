@@ -201,7 +201,14 @@ async def validate_file(
         
     # Generate PDF
     original_filename_no_ext = os.path.splitext(file.filename)[0]
-    pdf_path = generate_pdf_report(processed_df, stats, additional_columns=add_cols, original_filename=original_filename_no_ext, geo=geo)
+    
+    # Create proper naming base: districtname_upazilaName
+    if geo and geo.get("district") and geo.get("upazila") and geo.get("district") != "Unknown" and geo.get("upazila") != "Unknown":
+        base_filename = f"{geo['district']}_{geo['upazila']}".replace(" ", "_").replace("/", "_")
+    else:
+        base_filename = original_filename_no_ext
+
+    pdf_path = generate_pdf_report(processed_df, stats, additional_columns=add_cols, original_filename=base_filename, geo=geo)
     filename = os.path.basename(pdf_path)
     
     # Generate Excel exports
@@ -209,15 +216,15 @@ async def validate_file(
     yellow_fill = PatternFill(start_color='FFFFFF99', end_color='FFFFFF99', fill_type='solid')
     
     # 1) Full tested output with coloring
-    excel_filename = f"{original_filename_no_ext}_tested.xlsx"
+    excel_filename = f"{base_filename}_tested.xlsx"
     excel_path = os.path.join("downloads", excel_filename)
     
     # 2) Valid-only clean output
-    excel_valid_filename = f"{original_filename_no_ext}_valid.xlsx"
+    excel_valid_filename = f"{base_filename}_valid.xlsx"
     excel_valid_path = os.path.join("downloads", excel_valid_filename)
     
     # 3) Invalid-only output (NEW)
-    excel_invalid_filename = f"{original_filename_no_ext}_invalid.xlsx"
+    excel_invalid_filename = f"{base_filename}_invalid.xlsx"
     excel_invalid_path = os.path.join("downloads", excel_invalid_filename)
     
     # Find column indices in original workbook
