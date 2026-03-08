@@ -29,7 +29,6 @@ export default function SearchPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<ValidRecord | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  const getBackendUrl = () => process.env.NEXT_PUBLIC_BACKEND_URL || `http://${window.location.hostname}:8000`;
 
   const handleSearch = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -38,7 +37,7 @@ export default function SearchPage() {
     setLoading(true);
     setSearched(true);
     try {
-      const res = await fetch(`${getBackendUrl()}/search?query=${encodeURIComponent(query.trim())}&type=${searchType}`);
+      const res = await fetch(`/api/search?query=${encodeURIComponent(query.trim())}&type=${searchType}`);
       if (!res.ok) throw new Error("Search failed");
       const data = await res.json();
       setResults(data);
@@ -53,7 +52,7 @@ export default function SearchPage() {
   const handleDelete = async (record: ValidRecord) => {
     setDeleting(true);
     try {
-      const res = await fetch(`${getBackendUrl()}/record/${record.id}`, { method: "DELETE" });
+      const res = await fetch(`/api/record/${record.id}`, { method: "DELETE" });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || "Delete failed");

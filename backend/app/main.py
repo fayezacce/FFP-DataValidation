@@ -81,11 +81,12 @@ def migrate_json_to_db(db: Session):
 
 app = FastAPI(title="FFP Data Validator API", lifespan=lifespan)
 
-# Allow CORS for Next.js frontend
+# Allow CORS for all origins
+# Note: allow_credentials=True cannot be combined with allow_origins=["*"] (browser blocks it)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, restrict to frontend URL
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -566,12 +567,34 @@ async def update_statistics(update: ManualStatsUpdate, db: Session = Depends(get
 @app.get("/geo-info")
 async def get_geo_info():
     """Return the hierarchy of divisions, districts, and upazilas."""
-    from .bd_geo import DIVISIONS, DISTRICTS_BY_DIV, UPAZILAS_BY_DIST
+    from .bd_geo import DIVISIONS, DISTRICTS, UPAZILAS
+    divisions = list(DIVISIONS.values())
+    districts = {}
+    for d in DISTRICTS:
+        div_name = DIVISIONS.get(d["division_id"], "Unknown")
+        if div_name not in districts:
+            districts[div_name] = []
+        districts[div_name].append(d["name"])
+    
+    upazilas = {}
+    district_map = {d["id"]: d["name"] for d in DISTRICTS}
+    for u in UPAZILAS:
+        dist_name = district_map.get(u["district_id"], "Unknown")
+        if dist_name not in upazilas:
+            upazilas[dist_name] = []
+        upazilas[dist_name].append(u["name"])
+        
     return {
-        "divisions": DIVISIONS,
-        "districts": DISTRICTS_BY_DIV,
-        "upazilas": UPAZILAS_BY_DIST
+        "divisions": divisions,
+        "districts": districts,
+        "upazilas": upazilas
     }
+
+@app.get("/guess-location")
+async def guess_location(filename: str):
+    """Guess the location from the filename."""
+    from .bd_geo import fuzzy_match_location
+    return fuzzy_match_location(filename)
 
 if __name__ == "__main__":
     uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)

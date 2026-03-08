@@ -17,6 +17,7 @@ export default function Home() {
   const [selectedSheet, setSelectedSheet] = useState<string>("");
   const [workbook, setWorkbook] = useState<XLSX.WorkBook | null>(null);
   const [additionalColumns, setAdditionalColumns] = useState<string[]>([]);
+  const [showAdditionalColumns, setShowAdditionalColumns] = useState(false);
   const [loading, setLoading] = useState(false);
   const [geoData, setGeoData] = useState<{
     divisions: string[];
@@ -51,6 +52,15 @@ export default function Home() {
 
   const mapColumnsRef = useRef<HTMLDivElement>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
+  const errorRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (error) {
+      setTimeout(() => {
+        errorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 100);
+    }
+  }, [error]);
 
   useEffect(() => {
     if (file && !results && previewData.length > 0) {
@@ -71,8 +81,7 @@ export default function Home() {
   useEffect(() => {
     const fetchGeoInfo = async () => {
       try {
-        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || `http://${window.location.hostname}:8000`;
-        const res = await fetch(`${backendUrl}/geo-info`);
+        const res = await fetch(`/api/geo-info`);
         if (res.ok) {
           const data = await res.json();
           setGeoData(data);
@@ -91,6 +100,19 @@ export default function Home() {
       setResults(null);
       setError(null);
       parseExcel(selected);
+      
+      const fetchGuess = async () => {
+        try {
+          const res = await fetch(`/api/guess-location?filename=${encodeURIComponent(selected.name)}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.division && data.division !== "Unknown") setSelectedDivision(data.division);
+            if (data.district && data.district !== "Unknown") setSelectedDistrict(data.district);
+            if (data.upazila && data.upazila !== "Unknown") setSelectedUpazila(data.upazila);
+          }
+        } catch (e) {}
+      };
+      fetchGuess();
     }
   }, []);
 
@@ -147,13 +169,13 @@ export default function Home() {
               
           const dobMatch = cols.find(c => {
              if (!c) return false;
-             const s = String(c).toLowerCase();
-             return s.includes("dob") || s.includes("date");
+             const s = String(c).toLowerCase().replace(/\s+/g, '');
+             return s.includes("dob") || s.includes("date") || s.includes("জম্মতারিখ") || s.includes("জন্মতারিখ");
           });
           const nidMatch = cols.find(c => {
              if (!c) return false;
-             const s = String(c).toLowerCase();
-             return s.includes("nid") || s.includes("national");
+             const s = String(c).toLowerCase().replace(/\s+/g, '');
+             return s.includes("nid") || s.includes("national") || s.includes("জাতীয়পরিচয়পত্র");
           });
           
           if (dobMatch) setDobColumn(dobMatch);
@@ -196,8 +218,7 @@ export default function Home() {
     if (selectedUpazila) formData.append("upazila", selectedUpazila);
     
     try {
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || `http://${window.location.hostname}:8000`;
-      const res = await fetch(`${backendUrl}/validate`, {
+      const res = await fetch(`/api/validate`, {
         method: "POST",
         body: formData,
       });
@@ -216,7 +237,8 @@ export default function Home() {
     }
   };
 
-  const getBackendUrl = () => process.env.NEXT_PUBLIC_BACKEND_URL || `http://${window.location.hostname}:8000`;
+  // All file download URLs go through nginx /downloads proxy (same origin, no CORS)
+  const getDownloadUrl = (path: string) => path;
 
   return (
     <main className="min-h-screen p-4 md:p-8 lg:p-12 text-slate-200 flex flex-col">
@@ -262,7 +284,7 @@ export default function Home() {
             </div>
 
             {error && (
-              <div className="mt-4 p-4 rounded-lg bg-red-500/10 border border-red-500/50 flex items-start gap-3 text-red-400">
+              <div ref={errorRef} className="mt-4 p-4 rounded-lg bg-red-500/10 border border-red-500/50 flex items-start gap-3 text-red-400">
                 <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
                 <p>{error}</p>
               </div>
@@ -404,25 +426,36 @@ export default function Home() {
                   </div>
                 </div>
               </div>
-              <div className="space-y-2 col-span-1 md:col-span-2 font-medium text-slate-300 mt-4 mb-2">
-                Include Additional Columns In Reports
+              <div 
+                className="space-y-2 col-span-1 md:col-span-2 font-medium text-slate-300 mt-4 mb-2 flex items-center gap-3 cursor-pointer select-none"
+                onClick={() => setShowAdditionalColumns(!showAdditionalColumns)}
+              >
+                <input 
+                  type="checkbox" 
+                  className="rounded border-slate-600 bg-slate-900 text-indigo-500 pointer-events-none" 
+                  checked={showAdditionalColumns} 
+                  readOnly 
+                />
+                <span>Include Additional Columns In Reports</span>
               </div>
-              <div className="col-span-1 md:col-span-2 flex flex-wrap gap-3">
-                {columns.filter(c => c !== dobColumn && c !== nidColumn).map(col => (
-                  <label key={col} className="flex items-center gap-2 text-sm text-slate-400 bg-slate-800/50 px-3 py-2 rounded-lg border border-slate-700 cursor-pointer hover:bg-slate-700/50">
-                    <input 
-                      type="checkbox" 
-                      className="rounded border-slate-600 text-indigo-500 focus:ring-indigo-500 bg-slate-900"
-                      checked={additionalColumns.includes(col)}
-                      onChange={(e) => {
-                        if (e.target.checked) setAdditionalColumns([...additionalColumns, col]);
-                        else setAdditionalColumns(additionalColumns.filter(c => c !== col));
-                      }}
-                    />
-                    {col}
-                  </label>
-                ))}
-              </div>
+              {showAdditionalColumns && (
+                <div className="col-span-1 md:col-span-2 flex flex-wrap gap-3 p-4 bg-slate-800/20 rounded-lg border border-slate-700/50 transition-all">
+                  {columns.filter(c => c !== dobColumn && c !== nidColumn).map(col => (
+                    <label key={col} className="flex items-center gap-2 text-sm text-slate-400 bg-slate-800/50 px-3 py-2 rounded-lg border border-slate-700 cursor-pointer hover:bg-slate-700/50 transition-colors">
+                      <input 
+                        type="checkbox" 
+                        className="rounded border-slate-600 text-indigo-500 focus:ring-indigo-500 bg-slate-900"
+                        checked={additionalColumns.includes(col)}
+                        onChange={(e) => {
+                          if (e.target.checked) setAdditionalColumns([...additionalColumns, col]);
+                          else setAdditionalColumns(additionalColumns.filter(c => c !== col));
+                        }}
+                      />
+                      {col}
+                    </label>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="space-y-4">
@@ -621,41 +654,50 @@ export default function Home() {
               </button>
               
               <div className="flex flex-wrap gap-3">
-                <a 
-                  href={`${getBackendUrl()}${results.excel_url}`}
-                  download
-                  target="_blank"
-                  rel="noreferrer"
-                  className="bg-blue-600 hover:bg-blue-500 text-white px-5 py-2.5 rounded-lg font-medium flex items-center gap-2 transition-all shadow-lg shadow-blue-500/20 text-sm"
-                >
-                  <Download className="w-4 h-4" />
-                  All Rows
-                </a>
-                
-                <a 
-                  href={`${getBackendUrl()}${results.excel_valid_url}`}
-                  download
-                  target="_blank"
-                  rel="noreferrer"
-                  className="bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-2.5 rounded-lg font-medium flex items-center gap-2 transition-all shadow-lg shadow-emerald-500/20 text-sm"
-                >
-                  <Download className="w-4 h-4" />
-                  Valid Only
-                </a>
+                {(() => {
+                  const allValid = results.invalid_count === 0 && results.summary.issues === 0;
+                  return (
+                    <>
+                      <a 
+                        href={allValid ? undefined : getDownloadUrl(results.excel_url)}
+                        download={!allValid}
+                        target={allValid ? undefined : "_blank"}
+                        rel="noreferrer"
+                        className={`bg-blue-600 hover:bg-blue-500 text-white px-5 py-2.5 rounded-lg font-medium flex items-center gap-2 transition-all text-sm ${allValid ? "opacity-50 cursor-not-allowed" : "shadow-lg shadow-blue-500/20"}`}
+                        onClick={(e) => allValid && e.preventDefault()}
+                      >
+                        <Download className="w-4 h-4" />
+                        All Rows
+                      </a>
+                      
+                      <a 
+                        href={getDownloadUrl(results.excel_valid_url)}
+                        download
+                        target="_blank"
+                        rel="noreferrer"
+                        className="bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-2.5 rounded-lg font-medium flex items-center gap-2 transition-all shadow-lg shadow-emerald-500/20 text-sm"
+                      >
+                        <Download className="w-4 h-4" />
+                        Valid Only
+                      </a>
 
-                <a 
-                  href={`${getBackendUrl()}${results.excel_invalid_url}`}
-                  download
-                  target="_blank"
-                  rel="noreferrer"
-                  className="bg-red-600 hover:bg-red-500 text-white px-5 py-2.5 rounded-lg font-medium flex items-center gap-2 transition-all shadow-lg shadow-red-500/20 text-sm"
-                >
-                  <Download className="w-4 h-4" />
-                  Invalid Only
-                </a>
+                      <a 
+                        href={allValid ? undefined : getDownloadUrl(results.excel_invalid_url)}
+                        download={!allValid}
+                        target={allValid ? undefined : "_blank"}
+                        rel="noreferrer"
+                        className={`bg-red-600 hover:bg-red-500 text-white px-5 py-2.5 rounded-lg font-medium flex items-center gap-2 transition-all text-sm ${allValid ? "opacity-50 cursor-not-allowed" : "shadow-lg shadow-red-500/20"}`}
+                        onClick={(e) => allValid && e.preventDefault()}
+                      >
+                        <Download className="w-4 h-4" />
+                        Invalid Only
+                      </a>
+                    </>
+                  );
+                })()}
                 
                 <a 
-                  href={`${getBackendUrl()}${results.pdf_url}`}
+                  href={getDownloadUrl(results.pdf_url)}
                   download
                   target="_blank"
                   rel="noreferrer"

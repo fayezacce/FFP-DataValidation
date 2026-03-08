@@ -36,9 +36,7 @@ export default function StatisticsPage() {
   const [editForm, setEditForm] = useState({ old_district: "", old_upazila: "", district: "", upazila: "", total: 0, valid: 0, invalid: 0 });
   const [savingEdit, setSavingEdit] = useState(false);
 
-  const getBackendUrl = () => {
-    return process.env.NEXT_PUBLIC_BACKEND_URL || `http://${window.location.hostname}:8000`;
-  };
+  const getDownloadUrl = (path: string) => path;
 
   const openEditModal = (entry: StatsEntry) => {
     setEditingEntry(entry);
@@ -57,8 +55,7 @@ export default function StatisticsPage() {
     if (!editingEntry) return;
     setSavingEdit(true);
     try {
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || `http://${window.location.hostname}:8000`;
-      const res = await fetch(`${backendUrl}/statistics/update`, {
+      const res = await fetch(`/api/statistics/update`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -89,8 +86,7 @@ export default function StatisticsPage() {
     setLoading(true);
     setError(null);
     try {
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || `http://${window.location.hostname}:8000`;
-      const res = await fetch(`${backendUrl}/statistics`);
+      const res = await fetch(`/api/statistics`);
       if (!res.ok) throw new Error("Failed to load statistics");
       const json = await res.json();
       setData(json);
@@ -297,22 +293,22 @@ export default function StatisticsPage() {
                               <td className="px-5 py-3 text-center">
                                 <div className="flex items-center justify-center gap-2">
                                   {entry.excel_url && (
-                                    <a href={`${getBackendUrl()}${entry.excel_url}`} title="Download All Rows (Processed)" download className="p-1.5 rounded-md bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 active:bg-blue-500/30 transition-colors border border-blue-500/20">
+                                    <a href={getDownloadUrl(entry.excel_url)} title="Download All Rows (Processed)" download className="p-1.5 rounded-md bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 active:bg-blue-500/30 transition-colors border border-blue-500/20">
                                       <FileSpreadsheet className="w-4 h-4" />
                                     </a>
                                   )}
                                   {entry.excel_valid_url && entry.valid > 0 && (
-                                    <a href={`${getBackendUrl()}${entry.excel_valid_url}`} title="Download Valid Rows" download className="p-1.5 rounded-md bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 active:bg-emerald-500/30 transition-colors border border-emerald-500/20">
+                                    <a href={getDownloadUrl(entry.excel_valid_url)} title="Download Valid Rows" download className="p-1.5 rounded-md bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 active:bg-emerald-500/30 transition-colors border border-emerald-500/20">
                                       <CheckCircle2 className="w-4 h-4" />
                                     </a>
                                   )}
                                   {entry.excel_invalid_url && entry.invalid > 0 && (
-                                    <a href={`${getBackendUrl()}${entry.excel_invalid_url}`} title="Download Invalid Rows" download className="p-1.5 rounded-md bg-red-500/10 text-red-400 hover:bg-red-500/20 active:bg-red-500/30 transition-colors border border-red-500/20">
+                                    <a href={getDownloadUrl(entry.excel_invalid_url)} title="Download Invalid Rows" download className="p-1.5 rounded-md bg-red-500/10 text-red-400 hover:bg-red-500/20 active:bg-red-500/30 transition-colors border border-red-500/20">
                                       <FileWarning className="w-4 h-4" />
                                     </a>
                                   )}
                                   {entry.pdf_url && (
-                                    <a href={`${getBackendUrl()}${entry.pdf_url}`} title="Download PDF Summary" download className="p-1.5 rounded-md bg-amber-500/10 text-amber-500 hover:bg-amber-500/20 active:bg-amber-500/30 transition-colors border border-amber-500/20">
+                                    <a href={getDownloadUrl(entry.pdf_url!)} title="Download PDF Summary" download className="p-1.5 rounded-md bg-amber-500/10 text-amber-500 hover:bg-amber-500/20 active:bg-amber-500/30 transition-colors border border-amber-500/20">
                                       <FileText className="w-4 h-4" />
                                     </a>
                                   )}
