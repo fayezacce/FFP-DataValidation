@@ -4,7 +4,7 @@ import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { BarChart3, ArrowLeft, RefreshCw, MapPin, Clock, Hash, FileSpreadsheet, CheckCircle2, FileWarning, FileText, Printer, Edit2, X, Save, Search as SearchIcon, Download } from "lucide-react";
-import { fetchWithAuth, getBackendUrl, downloadFileWithAuth, isAuthenticated } from "@/lib/auth";
+import { fetchWithAuth, getBackendUrl, downloadFileWithAuth, isAuthenticated, isAdmin } from "@/lib/auth";
 
 interface StatsEntry {
   division: string;
@@ -333,12 +333,14 @@ export default function StatisticsPage() {
                                     >
                                       <FileText className="w-4 h-4" />
                                     </button>
-                                  )})}
+                                  )}
 
                                   <div className="w-px h-5 bg-slate-700/50 mx-1 print:hidden" />
-                                  <button onClick={() => openEditModal(entry)} title="Manual Edit" className="p-1.5 rounded-md bg-slate-500/10 text-slate-400 hover:bg-slate-500/20 hover:text-slate-200 transition-colors border border-slate-500/20 print:hidden">
-                                    <Edit2 className="w-4 h-4" />
-                                  </button>
+                                  {isAdmin() && (
+                                    <button onClick={() => openEditModal(entry)} title="Manual Edit" className="p-1.5 rounded-md bg-slate-500/10 text-slate-400 hover:bg-slate-500/20 hover:text-slate-200 transition-colors border border-slate-500/20 print:hidden">
+                                      <Edit2 className="w-4 h-4" />
+                                    </button>
+                                  )}
                                 </div>
                               </td>
                               <td className="px-5 py-3 text-slate-500 text-xs whitespace-nowrap">

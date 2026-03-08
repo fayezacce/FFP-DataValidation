@@ -10,6 +10,7 @@ import pandas as pd
 import io
 import os
 import uvicorn
+import asyncio
 from contextlib import asynccontextmanager
 import openpyxl
 from openpyxl.styles import PatternFill
@@ -19,6 +20,7 @@ from sqlalchemy.orm import Session
 from .database import engine, Base, get_db, SessionLocal
 from .models import SummaryStats, ValidRecord, UploadedFile, User
 from sqlalchemy import or_
+from sqlalchemy.dialects.postgresql import insert
 from .validator import process_dataframe
 from .pdf_generator import generate_pdf_report
 from .bd_geo import fuzzy_match_location, get_division_for_district
@@ -182,19 +184,18 @@ async def validate_file(
         # If fuzzy match failed, use Unknown — don't block the user from validating
 
     try:
-        if sheet_name and sheet_name.strip():
-            df = pd.read_excel(io.BytesIO(contents), sheet_name=sheet_name.strip(), header=header_row - 1, dtype=str)
-        else:
-            df = pd.read_excel(io.BytesIO(contents), header=header_row - 1, dtype=str)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to read Excel file: {str(e)}")
-        
-    try:
-        processed_df, stats = process_dataframe(df, dob_col=dob_column, nid_col=nid_column, header_row=header_row)
+        def read_and_process():
+            if sheet_name and sheet_name.strip():
+                df = pd.read_excel(io.BytesIO(contents), sheet_name=sheet_name.strip(), header=header_row - 1, dtype=str)
+            else:
+                df = pd.read_excel(io.BytesIO(contents), header=header_row - 1, dtype=str)
+            return process_dataframe(df, dob_col=dob_column, nid_col=nid_column, header_row=header_row)
+            
+        processed_df, stats = await asyncio.to_thread(read_and_process)
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error processing data: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error reading or processing data: {str(e)}")
         
     # Parse additional columns
     add_cols = [c.strip() for c in additional_columns.split(",")] if additional_columns else []
@@ -236,9 +237,9 @@ async def validate_file(
         processed_df[dob_column] = processed_df[dob_column].astype(object)
         processed_df[nid_column] = processed_df[nid_column].astype(object)
         
-        for idx, row in processed_df.iterrows():
-            processed_df.at[idx, dob_column] = row['Cleaned_DOB']
-            processed_df.at[idx, nid_column] = row['Cleaned_NID']
+        for idx in range(len(processed_df)):
+            processed_df.at[idx, dob_column] = processed_df.at[idx, 'Cleaned_DOB']
+            processed_df.at[idx, nid_column] = processed_df.at[idx, 'Cleaned_NID']
             
         cols_to_drop = ['Cleaned_DOB', 'Cleaned_NID', 'Status', 'Message', 'Excel_Row']
         export_df = processed_df.drop(columns=[c for c in cols_to_drop if c in processed_df.columns])
@@ -258,21 +259,17 @@ async def validate_file(
                     ws.cell(row=r, column=c).fill = yellow_fill
         wb.save(excel_path)
         
-        # Valid-only for .xls
         valid_mask = processed_df['Status'] != 'error'
-        valid_df = export_df[valid_mask]
-        valid_df.to_excel(excel_valid_path, index=False, engine='openpyxl')
+        export_df[valid_mask].to_excel(excel_valid_path, index=False, engine='openpyxl')
         
-        # Invalid-only for .xls
         invalid_mask = processed_df['Status'] == 'error'
-        invalid_df = export_df[invalid_mask]
-        invalid_df.to_excel(excel_invalid_path, index=False, engine='openpyxl')
+        export_df[invalid_mask].to_excel(excel_invalid_path, index=False, engine='openpyxl')
+        
     else:
+        # Standard .xlsx handling
+        # 1. Tested Workbook (Retain Original Formatting)
         wb = openpyxl.load_workbook(io.BytesIO(contents))
-        if sheet_name and sheet_name.strip() in wb.sheetnames:
-            ws = wb[sheet_name.strip()]
-        else:
-            ws = wb.active
+        ws = wb[sheet_name.strip()] if sheet_name and sheet_name.strip() in wb.sheetnames else wb.active
             
         for col_idx in range(1, ws.max_column + 1):
             val = ws.cell(row=header_row, column=col_idx).value
@@ -281,85 +278,51 @@ async def validate_file(
             if str(val).strip() == nid_column.strip():
                 nid_col_idx = col_idx
                 
-        for idx, row in processed_df.iterrows():
-            r = int(row['Excel_Row'])
-            status = row['Status']
+        for row in processed_df.itertuples(index=False):
+            r = int(row.Excel_Row)
+            status = row.Status
             
+            # Update cells safely (skip MergedCells which are read-only)
             if dob_col_idx:
-                cell = ws.cell(row=r, column=dob_col_idx, value=row['Cleaned_DOB'])
-                cell.number_format = '@'
+                c_dob = ws.cell(row=r, column=dob_col_idx)
+                if type(c_dob).__name__ != 'MergedCell':
+                    c_dob.value = row.Cleaned_DOB
+                    c_dob.number_format = '@'
+                    
             if nid_col_idx:
-                cell = ws.cell(row=r, column=nid_col_idx, value=row['Cleaned_NID'])
-                cell.number_format = '@'
+                c_nid = ws.cell(row=r, column=nid_col_idx)
+                if type(c_nid).__name__ != 'MergedCell':
+                    c_nid.value = row.Cleaned_NID
+                    c_nid.number_format = '@'
             
+            # Apply highlighting safely
             if status == 'error':
                 for c in range(1, ws.max_column + 1):
-                    ws.cell(row=r, column=c).fill = red_fill
+                    cell = ws.cell(row=r, column=c)
+                    if type(cell).__name__ != 'MergedCell':
+                        cell.fill = red_fill
             elif status == 'warning':
                 for c in range(1, ws.max_column + 1):
-                    ws.cell(row=r, column=c).fill = yellow_fill
-                    
+                    cell = ws.cell(row=r, column=c)
+                    if type(cell).__name__ != 'MergedCell':
+                        cell.fill = yellow_fill
+                        
         wb.save(excel_path)
         
-        # ── Valid-only workbook ──
-        wb_valid = openpyxl.load_workbook(io.BytesIO(contents))
-        if sheet_name and sheet_name.strip() in wb_valid.sheetnames:
-            ws_valid = wb_valid[sheet_name.strip()]
-        else:
-            ws_valid = wb_valid.active
-            
-        rows_to_delete_valid = []
-        for idx, row in processed_df.iterrows():
-            r = int(row['Excel_Row'])
-            status = row['Status']
-            
-            if status == 'error':
-                rows_to_delete_valid.append(r)
-            else:
-                if dob_col_idx:
-                    cell = ws_valid.cell(row=r, column=dob_col_idx, value=row['Cleaned_DOB'])
-                    cell.number_format = '@'
-                if nid_col_idx:
-                    cell = ws_valid.cell(row=r, column=nid_col_idx, value=row['Cleaned_NID'])
-                    cell.number_format = '@'
-                    
-        rows_to_delete_valid.sort(reverse=True)
-        for r in rows_to_delete_valid:
-            ws_valid.delete_rows(r)
-            
-        wb_valid.save(excel_valid_path)
+        # 2. Valid and Invalid Workbooks (Fast Pandas Export instead of openpyxl row deletion)
+        # Note: We swap the raw DOB/NID data with the cleaned versions for the final downloads
+        export_df = processed_df.copy()
+        export_df[dob_column] = export_df['Cleaned_DOB']
+        export_df[nid_column] = export_df['Cleaned_NID']
         
-        # ── Invalid-only workbook (NEW) ──
-        wb_invalid = openpyxl.load_workbook(io.BytesIO(contents))
-        if sheet_name and sheet_name.strip() in wb_invalid.sheetnames:
-            ws_invalid = wb_invalid[sheet_name.strip()]
-        else:
-            ws_invalid = wb_invalid.active
-            
-        rows_to_delete_invalid = []
-        for idx, row in processed_df.iterrows():
-            r = int(row['Excel_Row'])
-            status = row['Status']
-            
-            if status != 'error':
-                rows_to_delete_invalid.append(r)
-            else:
-                # Write cleaned data into invalid rows too
-                if dob_col_idx:
-                    cell = ws_invalid.cell(row=r, column=dob_col_idx, value=row['Cleaned_DOB'])
-                    cell.number_format = '@'
-                if nid_col_idx:
-                    cell = ws_invalid.cell(row=r, column=nid_col_idx, value=row['Cleaned_NID'])
-                    cell.number_format = '@'
-                # Highlight invalid rows red
-                for c in range(1, ws_invalid.max_column + 1):
-                    ws_invalid.cell(row=r, column=c).fill = red_fill
-                    
-        rows_to_delete_invalid.sort(reverse=True)
-        for r in rows_to_delete_invalid:
-            ws_invalid.delete_rows(r)
-            
-        wb_invalid.save(excel_invalid_path)
+        cols_to_drop = ['Cleaned_DOB', 'Cleaned_NID', 'DOB_Year', 'Status', 'Message', 'Excel_Row']
+        export_df = export_df.drop(columns=[c for c in cols_to_drop if c in export_df.columns])
+        
+        valid_mask = processed_df['Status'] != 'error'
+        export_df[valid_mask].to_excel(excel_valid_path, index=False, engine='openpyxl')
+        
+        invalid_mask = processed_df['Status'] == 'error'
+        export_df[invalid_mask].to_excel(excel_invalid_path, index=False, engine='openpyxl')
     
     # Prepare preview data (first 50 rows)
     preview_df = processed_df.head(50).replace({float('nan'): None})
@@ -384,53 +347,81 @@ async def validate_file(
     ).first()
     current_version = (summary.version + 1) if summary else 1
     
+    # Bulk check existing NIDs
+    valid_nids = [str(row['Cleaned_NID']).strip() for _, row in valid_rows.iterrows() if pd.notna(row['Cleaned_NID']) and str(row['Cleaned_NID']).strip()]
+    existing_records = []
+    if valid_nids:
+        # Query in chunks if too many NIDs
+        for i in range(0, len(valid_nids), 5000):
+            chunk = valid_nids[i:i+5000]
+            existing_records.extend(db.query(ValidRecord.nid, ValidRecord.district, ValidRecord.upazila).filter(ValidRecord.nid.in_(chunk)).all())
+    existing_map = {r.nid: r for r in existing_records}
+
+    insert_data = []    
     for _, row in valid_rows.iterrows():
-        nid = row['Cleaned_NID']
-        if not nid or nid.strip() == '':
+        nid = str(row['Cleaned_NID']).strip()
+        if not nid:
             continue
             
         row_dict = row.to_dict()
         # Sanitize NaN values for JSON storage
         row_dict = {k: (None if isinstance(v, float) and pd.isna(v) else v) for k, v in row_dict.items()}
         
-        existing = db.query(ValidRecord).filter(ValidRecord.nid == nid).first()
+        name_val = row.get('Name', row.get('name', 'Unknown'))
+        if pd.isna(name_val): name_val = 'Unknown'
+        dob_val = row.get('Cleaned_DOB', '')
+        if pd.isna(dob_val): dob_val = ''
         
-        if existing:
-            # NID already exists — check if from a different upazila
+        if nid in existing_map:
+            existing = existing_map[nid]
             if existing.upazila != geo["upazila"] or existing.district != geo["district"]:
                 cross_upazila_duplicates.append({
                     "nid": nid,
-                    "name": row.get('Name', row.get('name', 'Unknown')),
+                    "name": name_val,
                     "previous_district": existing.district,
                     "previous_upazila": existing.upazila,
                     "new_district": geo["district"],
                     "new_upazila": geo["upazila"]
                 })
-            # Update existing record with latest data
-            existing.dob = row['Cleaned_DOB']
-            existing.name = row.get('Name', row.get('name', 'Unknown'))
-            existing.division = geo["division"]
-            existing.district = geo["district"]
-            existing.upazila = geo["upazila"]
-            existing.source_file = file.filename
-            existing.data = row_dict
-            existing.upload_batch = current_version
-            existing.updated_at = datetime.utcnow()
             updated_count += 1
         else:
-            # Brand new NID — insert
-            db.add(ValidRecord(
-                nid=nid,
-                dob=row['Cleaned_DOB'],
-                name=row.get('Name', row.get('name', 'Unknown')),
-                division=geo["division"],
-                district=geo["district"],
-                upazila=geo["upazila"],
-                source_file=file.filename,
-                upload_batch=current_version,
-                data=row_dict
-            ))
             new_count += 1
+            existing_map[nid] = existing_records # prevent counting twice if duplicate inside the sheet itself
+            
+        insert_data.append({
+            "nid": nid,
+            "dob": dob_val,
+            "name": name_val,
+            "division": geo["division"],
+            "district": geo["district"],
+            "upazila": geo["upazila"],
+            "source_file": file.filename,
+            "upload_batch": current_version,
+            "data": row_dict,
+            "updated_at": datetime.utcnow()
+        })
+        
+    if insert_data:
+        # Chunked bulk upsert
+        for i in range(0, len(insert_data), 2000):
+            chunk = insert_data[i:i+2000]
+            stmt = insert(ValidRecord).values(chunk)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=['nid'],
+                set_={
+                    'dob': stmt.excluded.dob,
+                    'name': stmt.excluded.name,
+                    'division': stmt.excluded.division,
+                    'district': stmt.excluded.district,
+                    'upazila': stmt.excluded.upazila,
+                    'source_file': stmt.excluded.source_file,
+                    'upload_batch': stmt.excluded.upload_batch,
+                    'data': stmt.excluded.data,
+                    'updated_at': stmt.excluded.updated_at
+                }
+            )
+            # Execute async so other users aren't blocked completely out of db connections
+            db.execute(stmt)
     
     # 2. Accumulate SummaryStats (only unique valid NIDs count)
     new_unique_valid = new_count  # Only genuinely new NIDs
@@ -525,24 +516,31 @@ async def get_statistics(
 async def search_records(
     query: str, 
     type: str = "nid", 
+    page: int = 1,
+    limit: int = 50,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Search for valid records by NID, DOB, or Name."""
+    """Search for valid records by NID, DOB, or Name with pagination."""
     query = query.strip()
     if not query:
         return []
     
+    # Cap limit for safety in 100+ concurrent requests
+    limit = min(limit, 200)
+    offset = (page - 1) * limit
+    
     if type == "dob":
-        results = db.query(ValidRecord).filter(ValidRecord.dob == query).limit(200).all()
+        results = db.query(ValidRecord).filter(ValidRecord.dob == query).offset(offset).limit(limit).all()
     elif type == "name":
+        # Using ilike works great with GiST/B-tree pg_trgm index
         results = db.query(ValidRecord).filter(
             ValidRecord.name.ilike(f"%{query}%")
-        ).limit(200).all()
+        ).offset(offset).limit(limit).all()
     else:  # default: nid
         results = db.query(ValidRecord).filter(
             ValidRecord.nid.contains(query)
-        ).limit(200).all()
+        ).offset(offset).limit(limit).all()
     return results
 
 @app.get("/nid/{nid}")

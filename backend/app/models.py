@@ -63,6 +63,9 @@ class ValidRecord(Base):
 
     __table_args__ = (
         Index('ix_nid_dob', 'nid', 'dob'),
+        Index('ix_valid_record_district_upazila', 'district', 'upazila'),
+        Index('ix_valid_record_name', 'name'),
+        Index('ix_valid_record_batch', 'upload_batch'),
     )
 
 class UploadedFile(Base):

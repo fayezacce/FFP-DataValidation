@@ -132,6 +132,69 @@ export default function Home() {
     maxFiles: 1,
   });
 
+  const updateMapping = (json: any[][], rowIndex: number) => {
+    try {
+      if (!json || rowIndex <= 0 || rowIndex > json.length) return;
+      
+      const rawCols = json[rowIndex - 1] || [];
+      if (rawCols.length === 0) {
+        setColumns([]);
+        setPreviewData([]);
+        setDobColumn("");
+        setNidColumn("");
+        return;
+      }
+
+      const cols: string[] = [];
+      const counts: Record<string, number> = {};
+      
+      rawCols.forEach((c: any) => {
+        let name = String(c || "").trim();
+        if (!name) name = "Unnamed";
+        
+        if (counts[name]) {
+          counts[name]++;
+          cols.push(`${name} (${counts[name]})`);
+        } else {
+          counts[name] = 1;
+          cols.push(name);
+        }
+      });
+      
+      setColumns(cols);
+      setHeaderRow(rowIndex);
+      
+      // Auto-detect DOB and NID
+      const dobMatch = cols.find(c => {
+         if (!c) return false;
+         const s = String(c).toLowerCase().replace(/\s+/g, '');
+         return s.includes("dob") || s.includes("date") || s.includes("জম্মতারিখ") || s.includes("জন্মতারিখ");
+      });
+      const nidMatch = cols.find(c => {
+         if (!c) return false;
+         const s = String(c).toLowerCase().replace(/\s+/g, '');
+         return s.includes("nid") || s.includes("national") || s.includes("জাতীয়পরিচয়পত্র");
+      });
+      
+      setDobColumn(dobMatch || "");
+      setNidColumn(nidMatch || "");
+      setAdditionalColumns([]); // Reset when header row changes
+      
+      // Show first 15 rows of the sheet so user can pick any as header
+      const dataRows = json.slice(0, 15).map((row: any[]) => {
+        const obj: any = {};
+        cols.forEach((col: string, idx: number) => {
+          obj[col] = row[idx];
+        });
+        return obj;
+      });
+      setPreviewData(dataRows);
+    } catch (err) {
+      console.error("Mapping update failed:", err);
+      setError("Failed to update column mapping for this row.");
+    }
+  };
+
   const parseExcel = async (file: File) => {
     try {
       const buffer = await file.arrayBuffer();
@@ -166,44 +229,16 @@ export default function Home() {
       const worksheet = wb.Sheets[sheetName];
       const json = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
       (window as any).__raw_wb_json = json;
-        if (json.length > 0) {
-          let headerIdx = 0;
-          while (headerIdx < json.length && (!json[headerIdx] || json[headerIdx].length === 0)) {
-              headerIdx++;
-          }
-          if (headerIdx < json.length) {
-              const rawCols = json[headerIdx] || [];
-              const cols = rawCols.map((c: any) => String(c || ""));
-              setColumns(cols);
-              setHeaderRow(headerIdx + 1);
-              
-          const dobMatch = cols.find(c => {
-             if (!c) return false;
-             const s = String(c).toLowerCase().replace(/\s+/g, '');
-             return s.includes("dob") || s.includes("date") || s.includes("জম্মতারিখ") || s.includes("জন্মতারিখ");
-          });
-          const nidMatch = cols.find(c => {
-             if (!c) return false;
-             const s = String(c).toLowerCase().replace(/\s+/g, '');
-             return s.includes("nid") || s.includes("national") || s.includes("জাতীয়পরিচয়পত্র");
-          });
-          
-          if (dobMatch) setDobColumn(dobMatch);
-          if (nidMatch) setNidColumn(nidMatch);
-          setAdditionalColumns([]);
-          
-          const dataRows = json.slice(headerIdx + 1, headerIdx + 6).map((row: any[]) => {
-            const obj: any = {};
-            cols.forEach((col: string, idx: number) => {
-              obj[col] = row[idx];
-            });
-            return obj;
-          });
-          setPreviewData(dataRows);
-        } else {
-            setColumns([]);
-            setPreviewData([]);
+      
+      if (json.length > 0) {
+        let initialHeaderIdx = 0;
+        // Search for first row that isn't completely empty
+        while (initialHeaderIdx < json.length && (!json[initialHeaderIdx] || json[initialHeaderIdx].filter(x => x !== undefined && x !== null && x !== "").length === 0)) {
+            initialHeaderIdx++;
         }
+        if (initialHeaderIdx >= json.length) initialHeaderIdx = 0;
+        
+        updateMapping(json, initialHeaderIdx + 1);
       }
   };
 
@@ -294,9 +329,31 @@ export default function Home() {
             </div>
 
             {error && (
-              <div ref={errorRef} className="mt-4 p-4 rounded-lg bg-red-500/10 border border-red-500/50 flex items-start gap-3 text-red-400">
-                <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
-                <p>{error}</p>
+              <div ref={errorRef} className="mt-6 animate-in fade-in slide-in-from-top-4 duration-300">
+                <div className="bg-red-500/10 border-l-4 border-l-red-500 rounded-r-xl border-y border-r border-red-500/20 overflow-hidden">
+                  <div className="p-4 md:p-5">
+                    <div className="flex items-start gap-4">
+                      <div className="bg-red-500/20 p-2 rounded-lg shrink-0 mt-1">
+                        <AlertCircle className="w-6 h-6 text-red-400" />
+                      </div>
+                      <div className="space-y-1.5 flex-1">
+                        <h3 className="text-lg font-semibold text-red-400">Processing Failed</h3>
+                        <p className="text-slate-300 leading-relaxed text-sm md:text-base">
+                          {error}
+                        </p>
+                        <div className="mt-4 pt-4 border-t border-red-500/20">
+                          <h4 className="text-sm font-medium text-red-300 uppercase tracking-wider mb-2">Common Solutions:</h4>
+                          <ul className="text-sm text-slate-400 space-y-1.5 list-disc list-inside marker:text-red-500/50">
+                            <li>Check if you selected the correct <strong className="text-slate-200">Date of Birth</strong> and <strong className="text-slate-200">NID</strong> columns.</li>
+                            <li>Ensure your column names match the data (Double check the <strong className="text-slate-200">Header Row</strong> setting).</li>
+                            <li>Make sure there are no <strong className="text-slate-200">Merged Cells</strong> in your Excel data rows.</li>
+                            <li>Save your file as <strong className="text-slate-200">.xlsx</strong> if it's currently an older format.</li>
+                          </ul>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
           </div>
@@ -339,21 +396,11 @@ export default function Home() {
                   value={headerRow}
                   onChange={(e) => {
                       const val = parseInt(e.target.value);
-                      setHeaderRow(val);
                       const rawJson = (window as any).__raw_wb_json;
-                      if (rawJson && val > 0 && val <= rawJson.length) {
-                          const rawCols = rawJson[val - 1] || [];
-                          const newCols = rawCols.map((c: any) => String(c || ""));
-                          setColumns(newCols);
-                          
-                          const dataRows = rawJson.slice(val, val + 5).map((row: any[]) => {
-                            const obj: any = {};
-                            newCols.forEach((col: string, idx: number) => {
-                              obj[col] = row[idx];
-                            });
-                            return obj;
-                          });
-                          setPreviewData(dataRows);
+                      if (rawJson) {
+                        updateMapping(rawJson, val);
+                      } else {
+                        setHeaderRow(val);
                       }
                   }}
                 />
@@ -474,6 +521,7 @@ export default function Home() {
                 <table className="w-full text-sm text-left">
                   <thead className="bg-slate-800/80 text-slate-300 uppercase">
                     <tr>
+                      <th className="px-3 py-3 w-10 text-center text-[10px] text-slate-500 border-r border-slate-700/30">#</th>
                       {columns.map(col => (
                         <th key={col} className={`px-4 py-3 font-medium ${col === dobColumn || col === nidColumn ? 'text-indigo-400' : ''}`}>
                           {col}
@@ -482,15 +530,30 @@ export default function Home() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-700/50">
-                    {previewData.map((row, i) => (
-                      <tr key={i} className="bg-slate-900/50 hover:bg-slate-800/50 transition-colors">
-                        {columns.map(col => (
-                          <td key={`${i}-${col}`} className="px-4 py-3 whitespace-nowrap overflow-hidden text-ellipsis max-w-[200px]">
-                            {String(row[col] ?? "")}
+                    {previewData.map((row, i) => {
+                      const absoluteIdx = i + 1;
+                      const isHeader = absoluteIdx === headerRow;
+                      return (
+                        <tr 
+                          key={i} 
+                          onClick={() => {
+                            const json = (window as any).__raw_wb_json;
+                            if (json) updateMapping(json, absoluteIdx);
+                          }}
+                          className={`group ${isHeader ? 'bg-indigo-500/20' : 'bg-slate-900/50'} hover:bg-indigo-500/10 cursor-pointer transition-colors relative`}
+                          title={isHeader ? "Current Header Row" : "Click to set this as the header row"}
+                        >
+                          <td className={`px-3 py-3 text-center font-mono text-xs ${isHeader ? 'text-indigo-400 font-bold' : 'text-slate-600'} group-hover:text-indigo-400 border-r border-slate-700/30`}>
+                            {isHeader ? "★" : absoluteIdx}
                           </td>
-                        ))}
-                      </tr>
-                    ))}
+                          {columns.map(col => (
+                            <td key={`${i}-${col}`} className={`px-4 py-3 whitespace-nowrap overflow-hidden text-ellipsis max-w-[200px] ${isHeader ? 'text-indigo-200 font-semibold' : ''}`}>
+                              {String(row[col] ?? "")}
+                            </td>
+                          ))}
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

@@ -16,6 +16,7 @@ services:
   backend:
     build:
       context: ./backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 8 --timeout-keep-alive 65
     # Port 8000 NOT exposed externally - only reachable inside docker network via nginx
     environment:
       - MAX_UPLOAD_SIZE=20971520 # 20MB

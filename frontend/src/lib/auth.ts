@@ -87,16 +87,23 @@ export const fetchWithAuth = async (url: string, options: RequestInit = {}) => {
  * Authenticated Download Helper
  * Uses fetch with auth header and creates a Blob for download
  */
-export const downloadFileWithAuth = async (url: string, filename: string) => {
+export const downloadFileWithAuth = async (url: string, filename?: string) => {
   try {
     const response = await fetchWithAuth(url);
     if (!response.ok) throw new Error("Download failed");
+    
+    // Extract filename from URL if not provided explicitly, then decode URL entities and `+` spaces
+    let finalFileName = filename;
+    if (!finalFileName) {
+      finalFileName = url.split('/').pop() || "download";
+    }
+    finalFileName = decodeURIComponent(finalFileName.replace(/\+/g, ' '));
     
     const blob = await response.blob();
     const downloadUrl = window.URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = downloadUrl;
-    link.download = decodeURIComponent(filename); // Decode URL-encoded characters (like %20 to space)
+    link.download = finalFileName;
     document.body.appendChild(link);
     link.click();
     link.remove();
