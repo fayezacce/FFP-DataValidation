@@ -4,10 +4,20 @@ import React, { useState, useCallback, useRef, useEffect } from "react";
 import Link from "next/link";
 import { useDropzone } from "react-dropzone";
 import * as XLSX from "xlsx";
+import { useRouter } from "next/navigation";
 import { UploadCloud, FileSpreadsheet, AlertCircle, CheckCircle2, FileWarning, Play, Download, MapPin, BarChart3, Database } from "lucide-react";
+import { fetchWithAuth, getBackendUrl, downloadFileWithAuth, isAuthenticated } from "@/lib/auth";
 
 export default function Home() {
+  const router = useRouter();
   const [file, setFile] = useState<File | null>(null);
+  
+  useEffect(() => {
+    if (!isAuthenticated()) {
+      router.push("/login");
+    }
+  }, [router]);
+
   const [previewData, setPreviewData] = useState<any[]>([]);
   const [columns, setColumns] = useState<string[]>([]);
   const [dobColumn, setDobColumn] = useState("");
@@ -81,7 +91,7 @@ export default function Home() {
   useEffect(() => {
     const fetchGeoInfo = async () => {
       try {
-        const res = await fetch(`/api/geo-info`);
+        const res = await fetchWithAuth(`${getBackendUrl()}/geo-info`);
         if (res.ok) {
           const data = await res.json();
           setGeoData(data);
@@ -103,7 +113,7 @@ export default function Home() {
       
       const fetchGuess = async () => {
         try {
-          const res = await fetch(`/api/guess-location?filename=${encodeURIComponent(selected.name)}`);
+          const res = await fetchWithAuth(`${getBackendUrl()}/guess-location?filename=${encodeURIComponent(selected.name)}`);
           if (res.ok) {
             const data = await res.json();
             if (data.division && data.division !== "Unknown") setSelectedDivision(data.division);
@@ -218,7 +228,7 @@ export default function Home() {
     if (selectedUpazila) formData.append("upazila", selectedUpazila);
     
     try {
-      const res = await fetch(`/api/validate`, {
+      const res = await fetchWithAuth(`${getBackendUrl()}/validate`, {
         method: "POST",
         body: formData,
       });
@@ -658,54 +668,42 @@ export default function Home() {
                   const allValid = results.invalid_count === 0 && results.summary.issues === 0;
                   return (
                     <>
-                      <a 
-                        href={allValid ? undefined : getDownloadUrl(results.excel_url)}
-                        download={!allValid}
-                        target={allValid ? undefined : "_blank"}
-                        rel="noreferrer"
+                      <button 
+                        onClick={() => downloadFileWithAuth(results.excel_url, "all_rows.xlsx")}
+                        disabled={allValid}
                         className={`bg-blue-600 hover:bg-blue-500 text-white px-5 py-2.5 rounded-lg font-medium flex items-center gap-2 transition-all text-sm ${allValid ? "opacity-50 cursor-not-allowed" : "shadow-lg shadow-blue-500/20"}`}
-                        onClick={(e) => allValid && e.preventDefault()}
                       >
                         <Download className="w-4 h-4" />
                         All Rows
-                      </a>
+                      </button>
                       
-                      <a 
-                        href={getDownloadUrl(results.excel_valid_url)}
-                        download
-                        target="_blank"
-                        rel="noreferrer"
+                      <button 
+                        onClick={() => downloadFileWithAuth(results.excel_valid_url, "valid_rows.xlsx")}
                         className="bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-2.5 rounded-lg font-medium flex items-center gap-2 transition-all shadow-lg shadow-emerald-500/20 text-sm"
                       >
                         <Download className="w-4 h-4" />
                         Valid Only
-                      </a>
-
-                      <a 
-                        href={allValid ? undefined : getDownloadUrl(results.excel_invalid_url)}
-                        download={!allValid}
-                        target={allValid ? undefined : "_blank"}
-                        rel="noreferrer"
+                      </button>
+                      
+                      <button 
+                        onClick={() => downloadFileWithAuth(results.excel_invalid_url, "invalid_rows.xlsx")}
+                        disabled={allValid}
                         className={`bg-red-600 hover:bg-red-500 text-white px-5 py-2.5 rounded-lg font-medium flex items-center gap-2 transition-all text-sm ${allValid ? "opacity-50 cursor-not-allowed" : "shadow-lg shadow-red-500/20"}`}
-                        onClick={(e) => allValid && e.preventDefault()}
                       >
                         <Download className="w-4 h-4" />
                         Invalid Only
-                      </a>
+                      </button>
                     </>
                   );
                 })()}
                 
-                <a 
-                  href={getDownloadUrl(results.pdf_url)}
-                  download
-                  target="_blank"
-                  rel="noreferrer"
+                <button 
+                  onClick={() => downloadFileWithAuth(results.pdf_url, "validation_report.pdf")}
                   className="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-lg font-medium flex items-center gap-2 transition-all shadow-lg shadow-indigo-500/20 text-sm"
                 >
                   <Download className="w-4 h-4" />
                   PDF Report
-                </a>
+                </button>
               </div>
             </div>
 

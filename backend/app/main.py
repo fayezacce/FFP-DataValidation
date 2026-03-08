@@ -16,12 +16,14 @@ from openpyxl.styles import PatternFill
 import json
 from datetime import datetime
 from sqlalchemy.orm import Session
-from .database import engine, Base, get_db
-from .models import SummaryStats, ValidRecord, UploadedFile
+from .database import engine, Base, get_db, SessionLocal
+from .models import SummaryStats, ValidRecord, UploadedFile, User
 from sqlalchemy import or_
 from .validator import process_dataframe
 from .pdf_generator import generate_pdf_report
 from .bd_geo import fuzzy_match_location, get_division_for_district
+from .auth import get_current_user, require_role, hash_password
+from . import auth_routes
 import urllib.parse
 
 @asynccontextmanager
@@ -31,11 +33,20 @@ async def lifespan(app: FastAPI):
     # Create tables
     Base.metadata.create_all(bind=engine)
     
-    # Run migration
-    from .database import SessionLocal
+    # Run migrations and seeding
     db = SessionLocal()
     try:
         migrate_json_to_db(db)
+        # Seed default admin if no users exist
+        if db.query(User).count() == 0:
+            admin_user = User(
+                username="admin",
+                hashed_password=hash_password("admin123"),
+                role="admin"
+            )
+            db.add(admin_user)
+            db.commit()
+            print("Default admin user created: admin / admin123")
     finally:
         db.close()
     yield
@@ -81,15 +92,16 @@ def migrate_json_to_db(db: Session):
 
 app = FastAPI(title="FFP Data Validator API", lifespan=lifespan)
 
-# Allow CORS for all origins
-# Note: allow_credentials=True cannot be combined with allow_origins=["*"] (browser blocks it)
+# Allow CORS for all origins (development)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(auth_routes.router, prefix="/api")
 
 MAX_UPLOAD_SIZE = int(os.environ.get("MAX_UPLOAD_SIZE", 20 * 1024 * 1024))  # 20MB
 
@@ -104,7 +116,8 @@ async def validate_file(
     division: str = Form(None),
     district: str = Form(None),
     upazila: str = Form(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(["admin", "uploader"]))
 ):
     if not file.filename.endswith(('.xlsx', '.xls')):
         raise HTTPException(status_code=400, detail="Only Excel files (.xlsx, .xls) are allowed.")
@@ -456,7 +469,10 @@ async def download_file(filename: str):
     return FileResponse(file_path, media_type=media_type, filename=filename)
 
 @app.get("/statistics")
-async def get_statistics(db: Session = Depends(get_db)):
+async def get_statistics(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     """Return all accumulated validation statistics from DB."""
     entries = db.query(SummaryStats).order_by(SummaryStats.division, SummaryStats.district, SummaryStats.upazila).all()
     
@@ -472,7 +488,12 @@ async def get_statistics(db: Session = Depends(get_db)):
     }
 
 @app.get("/search")
-async def search_records(query: str, type: str = "nid", db: Session = Depends(get_db)):
+async def search_records(
+    query: str, 
+    type: str = "nid", 
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     """Search for valid records by NID, DOB, or Name."""
     query = query.strip()
     if not query:
@@ -491,7 +512,11 @@ async def search_records(query: str, type: str = "nid", db: Session = Depends(ge
     return results
 
 @app.get("/nid/{nid}")
-async def check_nid(nid: str, db: Session = Depends(get_db)):
+async def check_nid(
+    nid: str, 
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     """Public API: Check if an NID exists in the database. Returns the full record if found."""
     record = db.query(ValidRecord).filter(ValidRecord.nid == nid.strip()).first()
     if not record:
@@ -511,7 +536,11 @@ async def check_nid(nid: str, db: Session = Depends(get_db)):
     }
 
 @app.delete("/record/{record_id}")
-async def delete_record(record_id: int, db: Session = Depends(get_db)):
+async def delete_record(
+    record_id: int, 
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_role(["admin"]))
+):
     """Delete a single ValidRecord by ID. Decrements the related SummaryStats."""
     record = db.query(ValidRecord).filter(ValidRecord.id == record_id).first()
     if not record:
@@ -542,7 +571,11 @@ class ManualStatsUpdate(BaseModel):
     invalid: int
 
 @app.put("/statistics/update")
-async def update_statistics(update: ManualStatsUpdate, db: Session = Depends(get_db)):
+async def update_statistics(
+    update: ManualStatsUpdate, 
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_role(["admin"]))
+):
     """Manually update the statistics and location for a specific entry."""
     summary = db.query(SummaryStats).filter(
         SummaryStats.district == update.old_district,
