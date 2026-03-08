@@ -298,10 +298,9 @@ export default function StatisticsPage() {
                                   v{entry.version}
                                 </span>
                               </td>
-                              <td className="px-5 py-3 text-center">
-                                <div className="flex items-center justify-center gap-2">                                   {entry.excel_url && (
+                              <td className="px-5 py-3 text-center">                                  <div className="flex items-center justify-center gap-2">                                   {entry.excel_url && (
                                     <button 
-                                      onClick={() => downloadFileWithAuth(entry.excel_url!, "stats_all.xlsx")}
+                                      onClick={() => downloadFileWithAuth(entry.excel_url!, entry.excel_url!.split('/').pop() || "stats_all.xlsx")}
                                       title="Download All Rows (Processed)" 
                                       className="p-1.5 rounded-md bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 active:bg-blue-500/30 transition-colors border border-blue-500/20"
                                     >
@@ -310,7 +309,7 @@ export default function StatisticsPage() {
                                   )}
                                   {entry.excel_valid_url && entry.valid > 0 && (
                                     <button 
-                                      onClick={() => downloadFileWithAuth(entry.excel_valid_url!, "stats_valid.xlsx")}
+                                      onClick={() => downloadFileWithAuth(entry.excel_valid_url!, entry.excel_valid_url!.split('/').pop() || "stats_valid.xlsx")}
                                       title="Download Valid Rows" 
                                       className="p-1.5 rounded-md bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 active:bg-emerald-500/30 transition-colors border border-emerald-500/20"
                                     >
@@ -319,7 +318,7 @@ export default function StatisticsPage() {
                                   )}
                                   {entry.excel_invalid_url && entry.invalid > 0 && (
                                     <button 
-                                      onClick={() => downloadFileWithAuth(entry.excel_invalid_url!, "stats_invalid.xlsx")}
+                                      onClick={() => downloadFileWithAuth(entry.excel_invalid_url!, entry.excel_invalid_url!.split('/').pop() || "stats_invalid.xlsx")}
                                       title="Download Invalid Rows" 
                                       className="p-1.5 rounded-md bg-red-500/10 text-red-400 hover:bg-red-500/20 active:bg-red-500/30 transition-colors border border-red-500/20"
                                     >
@@ -328,13 +327,13 @@ export default function StatisticsPage() {
                                   )}
                                   {entry.pdf_url && (
                                     <button 
-                                      onClick={() => downloadFileWithAuth(entry.pdf_url!, "stats_report.pdf")}
+                                      onClick={() => downloadFileWithAuth(entry.pdf_url!, entry.pdf_url!.split('/').pop() || "stats_report.pdf")}
                                       title="Download PDF Summary" 
                                       className="p-1.5 rounded-md bg-amber-500/10 text-amber-500 hover:bg-amber-500/20 active:bg-amber-500/30 transition-colors border border-amber-500/20"
                                     >
                                       <FileText className="w-4 h-4" />
                                     </button>
-                                  )}
+                                  )})}
 
                                   <div className="w-px h-5 bg-slate-700/50 mx-1 print:hidden" />
                                   <button onClick={() => openEditModal(entry)} title="Manual Edit" className="p-1.5 rounded-md bg-slate-500/10 text-slate-400 hover:bg-slate-500/20 hover:text-slate-200 transition-colors border border-slate-500/20 print:hidden">
