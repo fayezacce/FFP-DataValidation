@@ -96,7 +96,7 @@ export const downloadFileWithAuth = async (url: string, filename: string) => {
     const downloadUrl = window.URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = downloadUrl;
-    link.download = filename;
+    link.download = decodeURIComponent(filename); // Decode URL-encoded characters (like %20 to space)
     document.body.appendChild(link);
     link.click();
     link.remove();

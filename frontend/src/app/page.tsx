@@ -669,7 +669,7 @@ export default function Home() {
                   return (
                     <>
                       <button 
-                        onClick={() => downloadFileWithAuth(results.excel_url, "all_rows.xlsx")}
+                        onClick={() => downloadFileWithAuth(results.excel_url, results.excel_url.split('/').pop() || "all_rows.xlsx")}
                         disabled={allValid}
                         className={`bg-blue-600 hover:bg-blue-500 text-white px-5 py-2.5 rounded-lg font-medium flex items-center gap-2 transition-all text-sm ${allValid ? "opacity-50 cursor-not-allowed" : "shadow-lg shadow-blue-500/20"}`}
                       >
@@ -678,7 +678,7 @@ export default function Home() {
                       </button>
                       
                       <button 
-                        onClick={() => downloadFileWithAuth(results.excel_valid_url, "valid_rows.xlsx")}
+                        onClick={() => downloadFileWithAuth(results.excel_valid_url, results.excel_valid_url.split('/').pop() || "valid_rows.xlsx")}
                         className="bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-2.5 rounded-lg font-medium flex items-center gap-2 transition-all shadow-lg shadow-emerald-500/20 text-sm"
                       >
                         <Download className="w-4 h-4" />
@@ -686,7 +686,7 @@ export default function Home() {
                       </button>
                       
                       <button 
-                        onClick={() => downloadFileWithAuth(results.excel_invalid_url, "invalid_rows.xlsx")}
+                        onClick={() => downloadFileWithAuth(results.excel_invalid_url, results.excel_invalid_url.split('/').pop() || "invalid_rows.xlsx")}
                         disabled={allValid}
                         className={`bg-red-600 hover:bg-red-500 text-white px-5 py-2.5 rounded-lg font-medium flex items-center gap-2 transition-all text-sm ${allValid ? "opacity-50 cursor-not-allowed" : "shadow-lg shadow-red-500/20"}`}
                       >
@@ -698,7 +698,7 @@ export default function Home() {
                 })()}
                 
                 <button 
-                  onClick={() => downloadFileWithAuth(results.pdf_url, "validation_report.pdf")}
+                  onClick={() => downloadFileWithAuth(results.pdf_url, results.pdf_url.split('/').pop() || "validation_report.pdf")}
                   className="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-lg font-medium flex items-center gap-2 transition-all shadow-lg shadow-indigo-500/20 text-sm"
                 >
                   <Download className="w-4 h-4" />
