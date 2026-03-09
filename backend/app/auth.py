@@ -41,7 +41,9 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+from fastapi import Request
+
+async def get_current_user(request: Request, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -58,6 +60,9 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
     user = db.query(User).filter(User.username == username).first()
     if user is None:
         raise credentials_exception
+    
+    # Store in request state for middleware access
+    request.state.user = user
     return user
 
 from fastapi import Security
@@ -65,7 +70,7 @@ from fastapi.security import APIKeyHeader
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
-async def get_api_key(api_key: str = Security(api_key_header), db: Session = Depends(get_db)):
+async def get_api_key(request: Request, api_key: str = Security(api_key_header), db: Session = Depends(get_db)):
     if not api_key:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -74,11 +79,15 @@ async def get_api_key(api_key: str = Security(api_key_header), db: Session = Dep
     # Check if a user exists with this API key
     user = db.query(User).filter(User.api_key == api_key).first()
     if user:
+        request.state.user = user
         return user
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail="Invalid API Key"
     )
+
+def get_password_hash(password):
+    return hash_password(password)
 
 def require_role(allowed_roles: List[str]):
     async def role_checker(current_user: User = Depends(get_current_user)):

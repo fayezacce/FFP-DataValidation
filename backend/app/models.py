@@ -33,6 +33,23 @@ class RemoteInstance(Base):
     last_synced_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+class Division(Base):
+    __tablename__ = "divisions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, index=True, nullable=False)
+    is_active = Column(Boolean, default=True)
+
+
+class District(Base):
+    __tablename__ = "districts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    division_name = Column(String, index=True, nullable=False)
+    name = Column(String, unique=True, index=True, nullable=False)
+    is_active = Column(Boolean, default=True)
+
+
 class Upazila(Base):
     __tablename__ = "upazilas"
 
@@ -107,4 +124,39 @@ class UploadedFile(Base):
     filename = Column(String)
     original_name = Column(String)
     filepath = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class Permission(Base):
+    __tablename__ = "permissions"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, index=True, nullable=False) # e.g. "upload_data", "view_admin"
+    description = Column(String)
+
+class RolePermission(Base):
+    __tablename__ = "role_permissions"
+    id = Column(Integer, primary_key=True, index=True)
+    role = Column(String, index=True, nullable=False) # admin, uploader, viewer
+    permission_name = Column(String, index=True, nullable=False)
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)
+    username = Column(String, index=True)
+    action = Column(String) # CREATE, UPDATE, DELETE
+    target_table = Column(String, index=True)
+    target_id = Column(String)
+    details = Column(JSON) # e.g. {"old": {...}, "new": {...}}
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class ApiUsageLog(Base):
+    __tablename__ = "api_usage_logs"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True, nullable=True)
+    username = Column(String, index=True, nullable=True)
+    method = Column(String)
+    path = Column(String, index=True)
+    status_code = Column(Integer)
+    ip_address = Column(String)
+    latency_ms = Column(Float)
     created_at = Column(DateTime, default=datetime.utcnow)

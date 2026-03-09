@@ -21,19 +21,24 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from fastapi.requests import Request
-import openpyxl
-from openpyxl.styles import PatternFill
-import json
-from datetime import datetime
-from sqlalchemy.orm import Session
 from .database import engine, Base, get_db, SessionLocal
-from .models import SummaryStats, ValidRecord, UploadedFile, User
+from .models import User, SystemConfig, RemoteInstance, SummaryStats, ValidRecord, UploadedFile, Division, District, Upazila, Permission, RolePermission, AuditLog, ApiUsageLog
+from .auth import (
+    get_current_user,
+    create_access_token,
+    verify_password,
+    get_password_hash,
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+    hash_password,
+    get_api_key
+)
+from .rbac import PermissionChecker
+from .audit import log_audit, log_api_usage
 from sqlalchemy import or_
 from sqlalchemy.dialects.postgresql import insert
 from .validator import process_dataframe
 from .pdf_generator import generate_pdf_report
 from .bd_geo import fuzzy_match_location, get_division_for_district
-from .auth import get_current_user, require_role, hash_password, get_api_key
 from . import auth_routes
 from . import admin_routes
 import urllib.parse
@@ -63,6 +68,13 @@ async def lifespan(app: FastAPI):
             db.add(admin_user)
             db.commit()
             print("Default admin user created: admin / admin123")
+            
+        seed_geo_data_if_empty(db)
+        seed_permissions_if_empty(db) # Added this line
+        
+        # Load the tree into memory for the bd_geo fuzzy matching
+        from . import bd_geo
+        bd_geo.load_geo_data_from_db(db)
     finally:
         db.close()
     yield
@@ -88,6 +100,80 @@ def migrate_schema(db: Session):
             db.commit()
         except Exception:
             db.rollback()
+
+def seed_geo_data_if_empty(db: Session):
+    """Seed the divisions, districts, and upazilas tables from geo_data.json if empty."""
+    import os
+    import json
+    
+    geo_file_path = os.path.join(os.path.dirname(__file__), "geo_data.json")
+    if not os.path.exists(geo_file_path):
+        print("geo_data.json not found. Skipping seeding.")
+        return
+
+    try:
+        if db.query(Division).count() == 0:
+            with open(geo_file_path, 'r', encoding='utf-8') as f:
+                divisions_data = json.load(f)
+            
+            div_count = 0
+            dist_count = 0
+            upz_count = 0
+            
+            for div in divisions_data:
+                div_name = div["name"]
+                db_div = Division(name=div_name, is_active=True)
+                db.add(db_div)
+                div_count += 1
+                
+                for dist in div["districts"]:
+                    dist_name = dist["name"]
+                    db_dist = District(division_name=div_name, name=dist_name, is_active=True)
+                    db.add(db_dist)
+                    dist_count += 1
+                    
+                    for upz_name in dist["upazilas"]:
+                        db_upz = Upazila(division_name=div_name, district_name=dist_name, name=upz_name, is_active=True)
+                        db.add(db_upz)
+                        upz_count += 1
+            
+            db.commit()
+            print(f"Successfully seeded {div_count} divisions, {dist_count} districts, and {upz_count} upazilas into the permanent database.")
+    except Exception as e:
+        db.rollback()
+        print(f"Error seeding geo data: {e}")
+
+
+def seed_permissions_if_empty(db: Session):
+    """Seed the permissions and role_permissions tables if empty."""
+    try:
+        if db.query(Permission).count() == 0:
+            perms = [
+                ("upload_data", "Can upload and validate Excel files"),
+                ("view_stats", "Can view statistics and dashboard"),
+                ("view_geo", "Can view geographical hierarchy"),
+                ("view_admin", "Can view administrative settings"),
+                ("manage_users", "Can create/edit users"),
+                ("manage_geo", "Can edit geographical data"),
+            ]
+            for name, desc in perms:
+                db.add(Permission(name=name, description=desc))
+            
+            # Role Map
+            role_map = {
+                "admin": [p[0] for p in perms],
+                "uploader": ["upload_data"],
+                "viewer": ["view_stats", "view_geo"]
+            }
+            for role, pnames in role_map.items():
+                for pname in pnames:
+                    db.add(RolePermission(role=role, permission_name=pname))
+            
+            db.commit()
+            print("Successfully seeded permissions and role mappings.")
+    except Exception as e:
+        db.rollback()
+        print(f"Error seeding permissions: {e}")
 
 
 def migrate_json_to_db(db: Session):
@@ -131,6 +217,46 @@ def migrate_json_to_db(db: Session):
 
 app = FastAPI(title="FFP Data Validator API", lifespan=lifespan)
 
+@app.middleware("http")
+async def audit_api_usage_middleware(request: Request, call_next):
+    import time
+    start_time = time.time()
+    
+    response = await call_next(request)
+    
+    process_time = (time.time() - start_time) * 1000
+    
+    # We log after the request is processed
+    # Extract user if authenticated
+    user_id = None
+    username = None
+    
+    # Simple check for user in state or from auth header (without full re-verify for speed)
+    # Better: Use the request.state if authentication middleware set it
+    # For now, we'll try to get it from the request state if available
+    user = getattr(request.state, "user", None)
+    if user:
+        user_id = user.id
+        username = user.username
+        
+    db = SessionLocal()
+    try:
+        log_api_usage(
+            db=db,
+            user_id=user_id,
+            username=username,
+            method=request.method,
+            path=request.url.path,
+            status_code=response.status_code,
+            ip_address=request.client.host if request.client else "unknown",
+            latency_ms=process_time
+        )
+    finally:
+        db.close()
+        
+    return response
+
+
 # Allow CORS for all origins (development)
 app.add_middleware(
     CORSMiddleware,
@@ -155,8 +281,8 @@ def get_db_rate_limit(request: Request):
 
 MAX_UPLOAD_SIZE = int(os.environ.get("MAX_UPLOAD_SIZE", 20 * 1024 * 1024))  # 20MB
 
-@app.post("/validate")
-async def validate_file(
+@app.post("/validate", dependencies=[Depends(PermissionChecker("upload_data"))])
+async def validate_excel(
     file: UploadFile = File(...),
     dob_column: str = Form(...),
     nid_column: str = Form(...),
@@ -167,7 +293,7 @@ async def validate_file(
     district: str = Form(None),
     upazila: str = Form(None),
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role(["admin", "uploader"]))
+    current_user: User = Depends(get_current_user) # Changed from require_role to get_current_user as PermissionChecker handles role
 ):
     if not file.filename.endswith(('.xlsx', '.xls')):
         raise HTTPException(status_code=400, detail="Only Excel files (.xlsx, .xls) are allowed.")
@@ -490,6 +616,24 @@ async def validate_file(
     db.commit()
     db.refresh(summary)
     
+    log_audit(
+        db, 
+        current_user, 
+        "CREATE", 
+        "summary_stats", 
+        summary.id, 
+        {
+            "action": "file_upload_validation", 
+            "filename": file.filename,
+            "total_rows": stats['total_rows'],
+            "valid": valid_count,
+            "invalid": error_count,
+            "new": new_count,
+            "updated": updated_count,
+            "geo": geo
+        }
+    )
+    
     return {
         "summary": stats,
         "geo": geo,
@@ -562,7 +706,7 @@ async def download_file(filename: str):
     media_type = "application/pdf" if filename.endswith('.pdf') else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     return FileResponse(file_path, media_type=media_type, filename=filename)
 
-@app.get("/statistics")
+@app.get("/statistics", dependencies=[Depends(PermissionChecker("view_stats"))])
 async def get_statistics(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -581,7 +725,7 @@ async def get_statistics(
         "grand_total": grand_total,
     }
 
-@app.get("/search")
+@app.get("/search", dependencies=[Depends(PermissionChecker("view_stats"))])
 async def search_records(
     query: str, 
     type: str = "nid", 
@@ -612,7 +756,7 @@ async def search_records(
         ).offset(offset).limit(limit).all()
     return results
 
-@app.get("/nid/{nid}")
+@app.get("/nid/{nid}", dependencies=[Depends(PermissionChecker("view_stats"))])
 async def check_nid(
     nid: str, 
     db: Session = Depends(get_db),
@@ -636,11 +780,11 @@ async def check_nid(
         "updated_at": record.updated_at.isoformat() + "Z" if record.updated_at else None,
     }
 
-@app.delete("/record/{record_id}")
+@app.delete("/record/{record_id}", dependencies=[Depends(PermissionChecker("manage_users"))]) # Assuming admin role for deleting records
 async def delete_record(
     record_id: int, 
     db: Session = Depends(get_db),
-    admin: User = Depends(require_role(["admin"]))
+    current_user: User = Depends(get_current_user) # Changed from admin: User = Depends(require_role(["admin"]))
 ):
     """Delete a single ValidRecord by ID. Decrements the related SummaryStats."""
     record = db.query(ValidRecord).filter(ValidRecord.id == record_id).first()
@@ -660,6 +804,8 @@ async def delete_record(
     db.delete(record)
     db.commit()
     
+    log_audit(db, current_user, "DELETE", "valid_records", record_id, {"nid": record.nid})
+    
     return {"deleted": True, "id": record_id, "nid": record.nid}
 
 class ManualStatsUpdate(BaseModel):
@@ -671,11 +817,11 @@ class ManualStatsUpdate(BaseModel):
     valid: int
     invalid: int
 
-@app.put("/statistics/update")
+@app.put("/statistics/update", dependencies=[Depends(PermissionChecker("manage_geo"))]) # Assuming admin role for updating stats
 async def update_statistics(
     update: ManualStatsUpdate, 
     db: Session = Depends(get_db),
-    admin: User = Depends(require_role(["admin"]))
+    current_user: User = Depends(get_current_user) # Changed from admin: User = Depends(require_role(["admin"]))
 ):
     """Manually update the statistics and location for a specific entry."""
     summary = db.query(SummaryStats).filter(
@@ -696,19 +842,42 @@ async def update_statistics(
     
     db.commit()
     db.refresh(summary)
+    
+    log_audit(db, current_user, "UPDATE", "summary_stats", summary.id, {"action": "summary_update"})
+    
     return summary
 
-@app.get("/geo-info")
+
+@app.get("/admin/audit-logs", dependencies=[Depends(PermissionChecker("view_admin"))])
+async def get_audit_logs(limit: int = 100, db: Session = Depends(get_db)):
+    return db.query(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit).all()
+
+@app.get("/admin/api-usage", dependencies=[Depends(PermissionChecker("view_admin"))])
+async def get_api_usage(limit: int = 100, db: Session = Depends(get_db)):
+    return db.query(ApiUsageLog).order_by(ApiUsageLog.created_at.desc()).limit(limit).all()
+
+
+@app.get("/geo-info", dependencies=[Depends(PermissionChecker("view_geo"))])
 async def get_geo_info(db: Session = Depends(get_db)):
     """Return the hierarchy of divisions, districts, and upazilas."""
-    from .bd_geo import DIVISIONS, DISTRICTS, get_dynamic_upazilas
-    divisions = list(DIVISIONS.values())
+    from .bd_geo import _division_lookup, _district_lookup, get_dynamic_upazilas
+    
+    divisions = list(_division_lookup.keys())
+    # The keys in _division_lookup are normalized (lowercase).
+    # Since the UI expects proper names, let's just get them from the values.
+    divisions = sorted(list(set(_division_lookup.values())))
+    
     districts = {}
-    for d in DISTRICTS:
-        div_name = DIVISIONS.get(d["division_id"], "Unknown")
+    for norm_name, record in _district_lookup.items():
+        div_name = record["division_name"]
+        dist_name = record["name"]
         if div_name not in districts:
             districts[div_name] = []
-        districts[div_name].append(d["name"])
+        if dist_name not in districts[div_name]:
+            districts[div_name].append(dist_name)
+            
+    for div in districts:
+        districts[div].sort()
     
     upazilas = get_dynamic_upazilas(db)
         
@@ -717,6 +886,26 @@ async def get_geo_info(db: Session = Depends(get_db)):
         "districts": districts,
         "upazilas": upazilas
     }
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str
+
+@app.post("/auth/change-password")
+async def change_password(req: ChangePasswordRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if not verify_password(req.old_password, current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Incorrect old password")
+    
+    current_user.hashed_password = get_password_hash(req.new_password)
+    db.commit()
+    
+    log_audit(db, current_user, "UPDATE", "users", current_user.id, {"action": "password_change"})
+    
+    return {"message": "Password updated successfully"}
+
+@app.get("/auth/me")
+async def read_users_me(current_user: User = Depends(get_current_user)):
+    return current_user
 
 @app.get("/guess-location")
 async def guess_location(filename: str):
@@ -825,11 +1014,11 @@ async def sync_import(
 
 import httpx
 
-@app.post("/admin/instances/{id}/trigger-sync")
+@app.post("/admin/instances/{id}/trigger-sync", dependencies=[Depends(PermissionChecker("view_admin"))])
 async def trigger_remote_sync(
     id: int,
     db: Session = Depends(get_db),
-    admin: User = Depends(require_role(["admin"]))
+    current_user: User = Depends(get_current_user)
 ):
     from .models import RemoteInstance
     instance = db.query(RemoteInstance).filter(RemoteInstance.id == id).first()
@@ -848,7 +1037,7 @@ async def trigger_remote_sync(
             
             # Use our own import function to dry run the code
             if records:
-                await sync_import({"records": records}, db=db, api_user=admin)
+                await sync_import({"records": records}, db=db, api_user=current_user)
             
             instance.last_synced_at = datetime.utcnow()
             db.commit()

@@ -5,25 +5,23 @@ services:
     image: postgres:15-alpine
     restart: always
     environment:
-      - POSTGRES_USER=fayez
-      - POSTGRES_PASSWORD=fayez_secret
-      - POSTGRES_DB=ffp_validator
+      - POSTGRES_USER=${POSTGRES_USER:-fayez}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-fayez_secret}
+      - POSTGRES_DB=${POSTGRES_DB:-ffp_validator}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - app_network
 
   backend:
-    build:
-      context: ./backend
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-    # Port 8000 NOT exposed externally - only reachable inside docker network via nginx
+    image: ghcr.io/fayezacce/ffp-datavalidation/backend:latest
+    restart: always
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
     environment:
-      - MAX_UPLOAD_SIZE=20971520 # 20MB
-      - DATABASE_URL=postgresql://fayez:fayez_secret@db:5432/ffp_validator
-      - JWT_SECRET=supersecretkeyforffpdatavalidator2024
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-fayez}:${POSTGRES_PASSWORD:-fayez_secret}@db:5432/${POSTGRES_DB:-ffp_validator}
+      - JWT_SECRET=${JWT_SECRET}
+      - MAX_UPLOAD_SIZE=20971520
     volumes:
-      - ./backend:/app
       - backend_downloads:/app/downloads
       - backend_uploads:/app/uploads
     depends_on:
@@ -32,23 +30,17 @@ services:
       - app_network
 
   frontend:
-    build:
-      context: ./frontend
-    command: npm run dev
-    # Port 3000 NOT exposed externally - only reachable inside docker network via nginx
+    image: ghcr.io/fayezacce/ffp-datavalidation/frontend:latest
+    restart: always
     depends_on:
       - backend
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-      - /app/.next
     networks:
       - app_network
 
   nginx:
     image: nginx:alpine
     ports:
-      - "3000:3000"
+      - "80:3000" # Mapping production port 80 to nginx 3000
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
