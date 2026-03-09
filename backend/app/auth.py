@@ -60,6 +60,26 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
         raise credentials_exception
     return user
 
+from fastapi import Security
+from fastapi.security import APIKeyHeader
+
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+async def get_api_key(api_key: str = Security(api_key_header), db: Session = Depends(get_db)):
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="API Key missing"
+        )
+    # Check if a user exists with this API key
+    user = db.query(User).filter(User.api_key == api_key).first()
+    if user:
+        return user
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Invalid API Key"
+    )
+
 def require_role(allowed_roles: List[str]):
     async def role_checker(current_user: User = Depends(get_current_user)):
         if current_user.role not in allowed_roles:

@@ -9,6 +9,7 @@ Provides Division → District → Upazila hierarchy and fuzzy filename matching
 import os
 import re
 from difflib import get_close_matches
+from sqlalchemy.orm import Session
 
 # Division ID → Division Name
 DIVISIONS = {
@@ -543,3 +544,28 @@ def get_division_for_district(district_name: str) -> str:
     if norm in _district_lookup:
         return DIVISIONS.get(_district_lookup[norm]["division_id"], "Unknown")
     return "Unknown"
+
+def get_dynamic_upazilas(db: Session = None):
+    """Get upazilas from DB if possible, else fallback."""
+    from .models import Upazila
+    if db:
+        db_upazilas = db.query(Upazila).filter(Upazila.is_active == True).all()
+        if db_upazilas:
+             # structure matching the return of get_geo_info
+             upazilas = {}
+             for u in db_upazilas:
+                 dist_name = u.district_name
+                 if dist_name not in upazilas:
+                     upazilas[dist_name] = []
+                 upazilas[dist_name].append(u.name)
+             return upazilas
+             
+    # Fallback to hardcoded
+    upazilas = {}
+    district_map = {d["id"]: d["name"] for d in DISTRICTS}
+    for u in UPAZILAS:
+        dist_name = district_map.get(u["district_id"], "Unknown")
+        if dist_name not in upazilas:
+            upazilas[dist_name] = []
+        upazilas[dist_name].append(u["name"])
+    return upazilas

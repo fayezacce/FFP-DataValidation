@@ -17,6 +17,15 @@ from openpyxl.styles import PatternFill
 import json
 from datetime import datetime
 from sqlalchemy.orm import Session
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from fastapi.requests import Request
+import openpyxl
+from openpyxl.styles import PatternFill
+import json
+from datetime import datetime
+from sqlalchemy.orm import Session
 from .database import engine, Base, get_db, SessionLocal
 from .models import SummaryStats, ValidRecord, UploadedFile, User
 from sqlalchemy import or_
@@ -24,8 +33,9 @@ from sqlalchemy.dialects.postgresql import insert
 from .validator import process_dataframe
 from .pdf_generator import generate_pdf_report
 from .bd_geo import fuzzy_match_location, get_division_for_district
-from .auth import get_current_user, require_role, hash_password
+from .auth import get_current_user, require_role, hash_password, get_api_key
 from . import auth_routes
+from . import admin_routes
 import urllib.parse
 import zipfile
 import tempfile
@@ -131,6 +141,17 @@ app.add_middleware(
 )
 
 app.include_router(auth_routes.router)
+app.include_router(admin_routes.router)
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+def get_db_rate_limit(request: Request):
+    db: Session = next(get_db())
+    config = db.query(SystemConfig).filter(SystemConfig.key == "rate_limit_value").first()
+    limit = config.value if config else "60/minute"
+    return limit
 
 MAX_UPLOAD_SIZE = int(os.environ.get("MAX_UPLOAD_SIZE", 20 * 1024 * 1024))  # 20MB
 
@@ -678,9 +699,9 @@ async def update_statistics(
     return summary
 
 @app.get("/geo-info")
-async def get_geo_info():
+async def get_geo_info(db: Session = Depends(get_db)):
     """Return the hierarchy of divisions, districts, and upazilas."""
-    from .bd_geo import DIVISIONS, DISTRICTS, UPAZILAS
+    from .bd_geo import DIVISIONS, DISTRICTS, get_dynamic_upazilas
     divisions = list(DIVISIONS.values())
     districts = {}
     for d in DISTRICTS:
@@ -689,13 +710,7 @@ async def get_geo_info():
             districts[div_name] = []
         districts[div_name].append(d["name"])
     
-    upazilas = {}
-    district_map = {d["id"]: d["name"] for d in DISTRICTS}
-    for u in UPAZILAS:
-        dist_name = district_map.get(u["district_id"], "Unknown")
-        if dist_name not in upazilas:
-            upazilas[dist_name] = []
-        upazilas[dist_name].append(u["name"])
+    upazilas = get_dynamic_upazilas(db)
         
     return {
         "divisions": divisions,
@@ -708,6 +723,138 @@ async def guess_location(filename: str):
     """Guess the location from the filename."""
     from .bd_geo import fuzzy_match_location
     return fuzzy_match_location(filename)
+
+# --- NID Verification & Sync ---
+
+@app.get("/ibas/nid-verify")
+@limiter.limit(get_db_rate_limit)
+async def ibas_verify_nid(
+    request: Request,
+    id: str,
+    db: Session = Depends(get_db),
+    api_user: User = Depends(get_api_key)
+):
+    """Secure, rate-limited endpoint for IBAS to verify NID."""
+    if not id or not id.strip():
+        raise HTTPException(status_code=400, detail="Missing NID")
+    
+    # Simple check, we don't return PII for security, just boolean
+    exists = db.query(ValidRecord).filter(ValidRecord.nid == id.strip()).first() is not None
+    return {"found": exists}
+
+@app.get("/sync/export")
+async def sync_export(
+    since: datetime = None,
+    db: Session = Depends(get_db),
+    api_user: User = Depends(get_api_key)
+):
+    """Export ValidRecords modified after the provided timestamp."""
+    query = db.query(ValidRecord)
+    if since:
+        query = query.filter(ValidRecord.updated_at > since)
+    
+    # We might want to limit the payload size in production, but for now we export all requested
+    records = query.all()
+    out = []
+    for r in records:
+        out.append({
+            "nid": r.nid,
+            "dob": r.dob,
+            "name": r.name,
+            "division": r.division,
+            "district": r.district,
+            "upazila": r.upazila,
+            "source_file": r.source_file,
+            "upload_batch": r.upload_batch,
+            "data": r.data,
+            "created_at": r.created_at.isoformat() + "Z" if r.created_at else None,
+            "updated_at": r.updated_at.isoformat() + "Z" if r.updated_at else None,
+        })
+    return {"records": out}
+
+@app.post("/sync/import")
+async def sync_import(
+    payload: dict,
+    db: Session = Depends(get_db),
+    api_user: User = Depends(get_api_key)
+):
+    """Import ValidRecords via bulk upsert."""
+    records = payload.get("records", [])
+    if not records:
+        return {"imported": 0}
+
+    insert_data = []
+    for r in records:
+        created_at = datetime.fromisoformat(r["created_at"].rstrip("Z")) if r.get("created_at") else datetime.utcnow()
+        updated_at = datetime.fromisoformat(r["updated_at"].rstrip("Z")) if r.get("updated_at") else datetime.utcnow()
+        insert_data.append({
+            "nid": r["nid"],
+            "dob": r.get("dob", ""),
+            "name": r.get("name", ""),
+            "division": r.get("division", ""),
+            "district": r.get("district", ""),
+            "upazila": r.get("upazila", ""),
+            "source_file": r.get("source_file", ""),
+            "upload_batch": r.get("upload_batch", 1),
+            "data": r.get("data", {}),
+            "created_at": created_at,
+            "updated_at": updated_at
+        })
+
+    # Chunked upsert
+    for i in range(0, len(insert_data), 1000):
+        chunk = insert_data[i:i+1000]
+        stmt = insert(ValidRecord).values(chunk)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=['nid'],
+            set_={
+                'dob': stmt.excluded.dob,
+                'name': stmt.excluded.name,
+                'division': stmt.excluded.division,
+                'district': stmt.excluded.district,
+                'upazila': stmt.excluded.upazila,
+                'source_file': stmt.excluded.source_file,
+                'upload_batch': stmt.excluded.upload_batch,
+                'data': stmt.excluded.data,
+                'updated_at': stmt.excluded.updated_at
+            }
+        )
+        db.execute(stmt)
+    db.commit()
+    return {"imported": len(records)}
+
+import httpx
+
+@app.post("/admin/instances/{id}/trigger-sync")
+async def trigger_remote_sync(
+    id: int,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_role(["admin"]))
+):
+    from .models import RemoteInstance
+    instance = db.query(RemoteInstance).filter(RemoteInstance.id == id).first()
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instance not found")
+        
+    since_param = f"?since={instance.last_synced_at.isoformat()}" if instance.last_synced_at else ""
+    url = f"{instance.url.rstrip('/')}/sync/export{since_param}"
+    
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.get(url, headers={"X-API-Key": instance.api_key})
+            resp.raise_for_status()
+            data = resp.json()
+            records = data.get("records", [])
+            
+            # Use our own import function to dry run the code
+            if records:
+                await sync_import({"records": records}, db=db, api_user=admin)
+            
+            instance.last_synced_at = datetime.utcnow()
+            db.commit()
+            return {"synced_count": len(records), "status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sync failed: {str(e)}")
 
 if __name__ == "__main__":
     uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)

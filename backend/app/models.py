@@ -13,6 +13,38 @@ class User(Base):
     api_key = Column(String, unique=True, index=True, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+class SystemConfig(Base):
+    __tablename__ = "system_configs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    key = Column(String, unique=True, index=True, nullable=False)
+    value = Column(String, nullable=False)
+    description = Column(String, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class RemoteInstance(Base):
+    __tablename__ = "remote_instances"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    url = Column(String, nullable=False)
+    api_key = Column(String, nullable=False)
+    is_active = Column(Boolean, default=True)
+    last_synced_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class Upazila(Base):
+    __tablename__ = "upazilas"
+
+    id = Column(Integer, primary_key=True, index=True)
+    division_name = Column(String, index=True, nullable=False)
+    district_name = Column(String, index=True, nullable=False)
+    name = Column(String, index=True, nullable=False)
+    is_active = Column(Boolean, default=True)
+
+    __table_args__ = (
+        Index('ix_upazila_district_name', 'district_name', 'name', unique=True),
+    )
 
 class SummaryStats(Base):
     __tablename__ = "summary_stats"
