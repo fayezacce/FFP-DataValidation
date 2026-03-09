@@ -21,7 +21,7 @@ class PermissionChecker:
         
         if not has_perm:
             raise HTTPException(
-                status_code=status.HTTP_403_FOR_FORBIDDEN,
+                status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Not enough permissions. Required: {self.required_permission}"
             )
         return current_user
