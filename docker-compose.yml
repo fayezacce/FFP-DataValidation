@@ -1,4 +1,4 @@
-version: '3.8'
+# FFP Data Validation System
 
 services:
   db:
@@ -9,21 +9,24 @@ services:
       - POSTGRES_PASSWORD=fayez_secret
       - POSTGRES_DB=ffp_validator
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - ./db_data:/var/lib/postgresql/data
     networks:
       - app_network
 
   backend:
     build:
       context: ./backend
-    ports:
-      - "8000:8000"
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    # Port 8000 NOT exposed externally - only reachable inside docker network via nginx
     environment:
       - MAX_UPLOAD_SIZE=20971520 # 20MB
       - DATABASE_URL=postgresql://fayez:fayez_secret@db:5432/ffp_validator
+      - JWT_SECRET=supersecretkeyforffpdatavalidator2024
+      - WATCHFILES_FORCE_POLLING=true
     volumes:
-      - backend_downloads:/app/downloads
-      - backend_uploads:/app/uploads
+      - ./backend:/app
+      - ./downloads:/app/downloads
+      - ./uploads:/app/uploads
     depends_on:
       - db
     networks:
@@ -32,18 +35,54 @@ services:
   frontend:
     build:
       context: ./frontend
-    ports:
-      - "3000:3000"
+    command: npm run dev -- -H 0.0.0.0
+    environment:
+      - NODE_ENV=development
+      - WATCHPACK_POLLING=true
+    # Port 3000 NOT exposed externally - only reachable inside docker network via nginx
     depends_on:
       - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
     networks:
       - app_network
 
-volumes:
-  backend_downloads:
-  backend_uploads:
-  postgres_data:
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - app_network
+    restart: unless-stopped
 
+  db-backup:
+    image: prodrigestivill/postgres-backup-local:15-alpine
+    restart: always
+    environment:
+      - POSTGRES_HOST=db
+      - POSTGRES_DB=ffp_validator
+      - POSTGRES_USER=fayez
+      - POSTGRES_PASSWORD=fayez_secret
+      - SCHEDULE=@hourly
+      - BACKUP_KEEP_DAYS=7
+      - BACKUP_KEEP_WEEKS=4
+      - BACKUP_KEEP_MONTHS=6
+      - HEALTHCHECK_PORT=80
+    volumes:
+      - ./db_backups:/backups
+    depends_on:
+      - db
+    networks:
+      - app_network
+
+ 
 networks:
   app_network:
     driver: bridge

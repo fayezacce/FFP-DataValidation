@@ -8,18 +8,21 @@ BENGALI_TO_ENGLISH = {
     '৫': '5', '৬': '6', '৭': '7', '৮': '8', '৯': '9'
 }
 
+_BEN_TRANS = str.maketrans(BENGALI_TO_ENGLISH)
+
 def normalize_digits(text):
     if text is None:
         return ""
-    text_str = str(text).strip()
-    for ben, eng in BENGALI_TO_ENGLISH.items():
-        text_str = text_str.replace(ben, eng)
-    return text_str
+    return str(text).strip().translate(_BEN_TRANS)
 
 def clean_dob(value) -> tuple[str, str]:
     """Returns (cleaned_date_str, year_str) or (None, None)"""
     if pd.isna(value) or value is None:
         return None, None
+        
+    # Check if it's already a datetime object (common with pandas reading Excel)
+    if isinstance(value, (datetime, pd.Timestamp)):
+        return value.strftime("%Y-%m-%d"), str(value.year)
         
     val_str = normalize_digits(str(value))
     
@@ -33,14 +36,9 @@ def clean_dob(value) -> tuple[str, str]:
         "%d-%m-%y"       # 31-12-90
     ]
     
-    # Check if it's already a datetime object (common with pandas reading Excel)
-    if isinstance(value, datetime) or isinstance(value, pd.Timestamp):
-        return value.strftime("%Y-%m-%d"), str(value.year)
-        
+    date_only = val_str.split(' ')[0]
     for fmt in formats:
         try:
-            # Handle potential time components in the string
-            date_only = val_str.split(' ')[0] 
             dt = datetime.strptime(date_only, fmt)
             return dt.strftime("%Y-%m-%d"), str(dt.year)
         except ValueError:
@@ -57,93 +55,215 @@ def clean_dob(value) -> tuple[str, str]:
         
     return None, None
 
+_NON_DIGIT = re.compile(r'\D')
+
+def check_fake_nid(nid: str) -> tuple[bool, str]:
+    """Detect suspicious NID patterns. Returns (is_suspicious, reason).
+    Called AFTER length validation passes (nid is already digits-only)."""
+    if not nid or len(nid) < 10:
+        return False, ""
+
+    # All same digit  e.g. 1111111111
+    if len(set(nid)) == 1:
+        return True, "All-same-digit NID (likely fake)"
+
+    # All zeros
+    if all(c == '0' for c in nid):
+        return True, "All-zero NID"
+
+    # Trailing triple zero
+    if nid.endswith("000"):
+        return True, "Trailing triple-zero NID (likely fake)"
+
+    # Trailing double zero (softer warning — still suspicious)
+    if nid.endswith("00"):
+        return True, "Trailing double-zero NID (suspicious)"
+
+    # Ascending sequential run of 7+ consecutive digits (e.g. 1234567)
+    for i in range(len(nid) - 6):
+        chunk = nid[i:i+7]
+        if all(int(chunk[j+1]) == int(chunk[j]) + 1 for j in range(6)):
+            return True, "Sequential ascending digit pattern detected"
+
+    # Descending sequential run of 7+
+    for i in range(len(nid) - 6):
+        chunk = nid[i:i+7]
+        if all(int(chunk[j+1]) == int(chunk[j]) - 1 for j in range(6)):
+            return True, "Sequential descending digit pattern detected"
+
+    return False, ""
+
+
 def validate_nid(nid_raw, dob_year) -> tuple[str, str, str]:
     """Returns (final_nid, status, message)"""
     if pd.isna(nid_raw) or nid_raw is None:
         return "", "error", "Missing NID"
-        
+
     nid_str = normalize_digits(str(nid_raw)).replace(".0", "").strip()
-    
-    # Remove any non-digit characters
-    nid_str = re.sub(r'\D', '', nid_str)
-    
-    if len(nid_str) == 10:
-        return nid_str, "success", "Smart NID"
-    elif len(nid_str) == 17:
-        return nid_str, "success", "Standard NID"
-    elif len(nid_str) == 13:
+    nid_str = _NON_DIGIT.sub('', nid_str)
+
+    nid_len = len(nid_str)
+    if nid_len == 10:
+        final_nid, status, message = nid_str, "success", "Smart NID"
+    elif nid_len == 17:
+        final_nid, status, message = nid_str, "success", "Standard NID"
+    elif nid_len == 13:
         if dob_year:
-            # 13 digits convert to 17 by adding the birth year at the start.
             new_nid = f"{dob_year}{nid_str}"
-            return new_nid, "warning", "Converted 13 to 17 digits"
+            final_nid, status, message = new_nid, "warning", "Converted 13 to 17 digits"
         else:
             return nid_str, "error", "13-digit NID but missing valid DOB year"
     else:
-        return nid_str, "error", f"Invalid NID length: {len(nid_str)} digits"
+        return nid_str, "error", f"Invalid NID length: {nid_len} digits"
+
+    # Fraud pattern check — only on structurally valid NIDs
+    is_fake, fake_reason = check_fake_nid(final_nid)
+    if is_fake:
+        return final_nid, "error", fake_reason
+
+    return final_nid, status, message
+
+def normalize_col(c: str) -> str:
+    """Normalizes a column name for fuzzy matching."""
+    if not c:
+        return ""
+    # Remove all whitespace, newlines, and dots (used by pandas for duplicates like Name.1)
+    s = str(c).lower()
+    # Remove pandas duplicate suffixes like .1, .2, .3
+    import re
+    s = re.sub(r'\.\d+$', '', s)
+    # Remove frontend duplicate suffixes like (2), (3)
+    s = re.sub(r'\s*\(\d+\)$', '', s)
+    # Remove all non-alphanumeric/bangla chars
+    s = re.sub(r'[^\w\u0980-\u09ff]', '', s)
+    return s
+
+def resolve_column_name(target: str, available_cols: list) -> str:
+    """
+    Finds the best match for target in available_cols.
+    1. Exact match
+    2. Case-insensitive/trimmed match
+    3. Slug match (respecting duplicate indices if present)
+    """
+    if target in available_cols:
+        return target
+    
+    available_list = [str(c) for c in available_cols]
+    target_str = str(target)
+    
+    # 1. Exact match (already checked above but for safety)
+    if target_str in available_list:
+        return available_cols[available_list.index(target_str)]
+        
+    # 2. Trimmed Case-insensitive
+    t_clean = target_str.strip().lower()
+    for i, c in enumerate(available_list):
+        if c.strip().lower() == t_clean:
+            return available_cols[i]
+            
+    # 3. Slug matching
+    import re
+    def get_index_suffix(s):
+        # Extract .1 or (2)
+        m = re.search(r'[\.\s\(]+(\d+)[\)]*$', s)
+        return m.group(1) if m else None
+        
+    target_slug = normalize_col(target_str)
+    target_idx = get_index_suffix(target_str)
+    
+    # First try: Slug + Index must match
+    for i, c in enumerate(available_list):
+        if normalize_col(c) == target_slug and get_index_suffix(c) == target_idx:
+            return available_cols[i]
+            
+    # Second try: Just Slug (takes first occurrence)
+    for i, c in enumerate(available_list):
+        if normalize_col(c) == target_slug:
+            return available_cols[i]
+            
+    return None
 
 def process_dataframe(df: pd.DataFrame, dob_col: str, nid_col: str, header_row: int = 1):
     """Processes DataFrame and adds cleaned cols, status, message, and Excel_Row."""
     results = df.copy()
     
+    # Resolve columns using fuzzy logic
+    actual_dob_col = resolve_column_name(dob_col, df.columns.tolist())
+    actual_nid_col = resolve_column_name(nid_col, df.columns.tolist())
+    
     # Ensure columns exist
-    if dob_col not in df.columns or nid_col not in df.columns:
-        raise ValueError(f"Columns {dob_col} or {nid_col} not found in uploaded file.")
+    if not actual_dob_col or not actual_nid_col:
+        available = ", ".join([str(c) for c in df.columns[:20]])
+        raise ValueError(f"Column mismatch. Expected DOB: '{dob_col}', NID: '{nid_col}'. Available in file: {available}")
     
-    # Prepare result columns
-    results['Cleaned_DOB'] = None
-    results['DOB_Year'] = None
-    results['Cleaned_NID'] = None
-    results['Status'] = None
-    results['Message'] = None
-    results['Excel_Row'] = None
+    dob_col = actual_dob_col
+    nid_col = actual_nid_col
     
-    stats = {"total_rows": len(df), "issues": 0, "converted_nid": 0}
+    n = len(df)
+    cleaned_dobs = [None] * n
+    dob_years = [None] * n
+    cleaned_nids = [None] * n
+    statuses = [None] * n
+    messages = [None] * n
+    excel_rows = [None] * n
     
-    for idx, row in df.iterrows():
-        dob_raw = row[dob_col]
-        nid_raw = row[nid_col]
+    stats = {"total_rows": n, "issues": 0, "converted_nid": 0}
+    
+    # Use itertuples for ~10x speedup over iterrows
+    dob_col_idx = df.columns.get_loc(dob_col)
+    nid_col_idx = df.columns.get_loc(nid_col)
+    
+    for i, tup in enumerate(df.itertuples(index=True)):
+        idx = tup[0]  # original df index
+        dob_raw = tup[dob_col_idx + 1]  # +1 because Index is tup[0]
+        nid_raw = tup[nid_col_idx + 1]
         
         cleaned_dob, dob_year = clean_dob(dob_raw)
         final_nid, status, message = validate_nid(nid_raw, dob_year)
         
-        results.at[idx, 'Cleaned_DOB'] = cleaned_dob if cleaned_dob else "Invalid Date"
-        results.at[idx, 'DOB_Year'] = dob_year
-        results.at[idx, 'Cleaned_NID'] = final_nid
-        results.at[idx, 'Status'] = status
-        results.at[idx, 'Message'] = message
-        # df.index is 0-based relative to the sliced dataframe.
-        # Original excel row = index + header_row + 1 (for 1-based row numbers)
-        results.at[idx, 'Excel_Row'] = idx + header_row + 1
+        cleaned_dobs[i] = cleaned_dob if cleaned_dob else "Invalid Date"
+        dob_years[i] = dob_year
+        cleaned_nids[i] = final_nid
+        statuses[i] = status
+        messages[i] = message
+        excel_rows[i] = idx + header_row + 1
         
         if status == "error" or not cleaned_dob:
             stats["issues"] += 1
             if status != "error":
-                results.at[idx, 'Status'] = "error"
-                results.at[idx, 'Message'] = "Invalid DOB"
+                statuses[i] = "error"
+                messages[i] = "Invalid DOB"
             elif not cleaned_dob:
-                results.at[idx, 'Message'] += " and Invalid DOB"
-            
+                messages[i] = message + " and Invalid DOB"
         elif status == "warning":
             stats["converted_nid"] += 1
-            
-    # Find duplicate NIDs
+    
+    results['Cleaned_DOB'] = cleaned_dobs
+    results['Cleaned_NID'] = cleaned_nids
+    results['Status'] = statuses
+    results['Message'] = messages
+    results['Excel_Row'] = excel_rows
+    
+    # Find duplicate NIDs (vectorized)
     valid_nids_mask = results['Cleaned_NID'].notna() & (results['Cleaned_NID'] != '')
     duplicates_mask = results.duplicated(subset=['Cleaned_NID'], keep=False) & valid_nids_mask
-    duplicate_indices = results[duplicates_mask].index
-
-    for idx in duplicate_indices:
-        current_status = results.at[idx, 'Status']
-        current_msg = results.at[idx, 'Message']
+    
+    dup_idx = results.index[duplicates_mask]
+    for idx in dup_idx:
+        pos = results.index.get_loc(idx)
+        current_status = statuses[pos]
+        current_msg = messages[pos]
         
         if current_status != "error":
             if current_status == "warning":
                 stats["converted_nid"] -= 1
             stats["issues"] += 1
-            results.at[idx, 'Status'] = "error"
+            statuses[pos] = "error"
             
         if "Duplicate NID" not in str(current_msg):
-            results.at[idx, 'Message'] = f"{current_msg} and Duplicate NID" if current_msg and current_msg != "nan" else "Duplicate NID"
+            messages[pos] = f"{current_msg} and Duplicate NID" if current_msg and current_msg != "nan" else "Duplicate NID"
+    
+    results['Status'] = statuses
+    results['Message'] = messages
 
-    # Drop intermediate columns if desired
-    results = results.drop(columns=['DOB_Year'])
     return results, stats

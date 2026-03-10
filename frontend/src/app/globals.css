@@ -24,10 +24,15 @@ body {
 }
 
 @media print {
+  @page {
+    size: A4 portrait;
+    margin: 1cm;
+  }
   body {
     background: white !important;
     color: black !important;
     background-image: none !important;
+    font-size: 11pt !important;
   }
   .glass-panel {
     background: transparent !important;
@@ -36,25 +41,75 @@ body {
     border: none !important;
     box-shadow: none !important;
   }
-  table th {
-    background-color: #f1f5f9 !important;
-    color: #000 !important;
-    border-bottom: 2px solid #cbd5e1 !important;
+
+  /* Make sure everything within the print report is black/white */
+  .print-report {
+    display: block !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
   }
-  table td, table th {
-    color: #000 !important;
-    border-bottom: 1px solid #e2e8f0 !important;
+
+  .print-report h1 {
+    font-size: 18pt !important;
+    margin-bottom: 4px !important;
+    font-weight: bold !important;
+    text-align: center !important;
+    color: black !important;
   }
-  table tr {
+  
+  .print-report p {
+    font-size: 10pt !important;
+    margin-bottom: 20px !important;
+    text-align: center !important;
+    color: #444 !important;
+  }
+
+  .print-report table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    margin-top: 10px !important;
+  }
+
+  .print-report th {
+    background-color: #eee !important;
+    color: black !important;
+    border: 1px solid #999 !important;
+    padding: 8px !important;
+    font-weight: bold !important;
+    text-align: left !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .print-report td {
+    border: 1px solid #ccc !important;
+    padding: 6px 8px !important;
+    color: black !important;
     page-break-inside: avoid;
   }
-  table {
-    border: 1px solid #cbd5e1 !important;
+
+  .print-report tr.division-row td {
+    background-color: #f8f8f8 !important;
+    font-weight: bold !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
-  /* Force dark text on print for spans/links too */
-  td span, td a, p {
-    color: #000 !important;
-    border-color: transparent !important;
-    background: transparent !important;
+  
+  .print-report tr.district-row td {
+    font-weight: 600 !important;
+    padding-left: 20px !important;
+  }
+
+  .print-report tr.upazila-row td {
+    padding-left: 40px !important;
+  }
+
+  .print-report tr.grand-total td {
+    font-weight: bold !important;
+    border-top: 2px solid black !important;
+    background-color: #eee !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
 }
