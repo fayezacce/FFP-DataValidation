@@ -1,35 +1,46 @@
-name: FF Validator CI
+name: FF Validator CI/CD
 
 on:
   push:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  # Manual trigger for emergency deploys
+  workflow_dispatch:
+    inputs:
+      deploy_only:
+        description: 'Skip tests & build — just redeploy existing images'
+        required: false
+        default: 'false'
 
 jobs:
+  # ── 1. Tests ────────────────────────────────────────────────────────────────
   test:
+    if: github.event.inputs.deploy_only != 'true'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Python 3.12
       uses: actions/setup-python@v5
       with:
         python-version: "3.12"
-        
-    - name: Install dependencies
+
+    - name: Install backend dependencies
       run: |
         cd backend
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        
+
     - name: Run Pytest
       run: |
         cd backend
-        python -m pytest tests/ -v
+        python -m pytest tests/ -v --tb=short
 
+  # ── 2. Build & Push Docker Images ──────────────────────────────────────────
   build-and-push:
     needs: test
+    if: always() && (needs.test.result == 'success' || github.event.inputs.deploy_only == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -48,7 +59,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: ./backend
-          push: true
+          push: ${{ github.event_name != 'pull_request' }}
           tags: |
             ghcr.io/${{ github.repository_owner }}/ffp-datavalidation/backend:latest
             ghcr.io/${{ github.repository_owner }}/ffp-datavalidation/backend:${{ github.sha }}
@@ -57,7 +68,40 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: ./frontend
-          push: true
+          push: ${{ github.event_name != 'pull_request' }}
           tags: |
             ghcr.io/${{ github.repository_owner }}/ffp-datavalidation/frontend:latest
             ghcr.io/${{ github.repository_owner }}/ffp-datavalidation/frontend:${{ github.sha }}
+
+  # ── 3. Auto-Deploy to Production ───────────────────────────────────────────
+  deploy:
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: production   # Requires approval if enabled in GitHub Environments
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT || 22 }}
+          script: |
+            set -euo pipefail
+            cd ${{ secrets.DEPLOY_PATH || '/opt/ffp-datavalidation' }}
+
+            echo "=== Pulling latest images ==="
+            docker compose -f docker-compose.prod.yml pull
+
+            echo "=== Rolling restart (no downtime) ==="
+            docker compose -f docker-compose.prod.yml up -d --remove-orphans
+
+            echo "=== Waiting for health check ==="
+            sleep 10
+            docker compose -f docker-compose.prod.yml ps
+
+            echo "=== Pruning old images ==="
+            docker image prune -f --filter "until=48h"
+
+            echo "=== Deploy complete ==="

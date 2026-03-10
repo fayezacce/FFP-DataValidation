@@ -57,27 +57,71 @@ def clean_dob(value) -> tuple[str, str]:
 
 _NON_DIGIT = re.compile(r'\D')
 
+def check_fake_nid(nid: str) -> tuple[bool, str]:
+    """Detect suspicious NID patterns. Returns (is_suspicious, reason).
+    Called AFTER length validation passes (nid is already digits-only)."""
+    if not nid or len(nid) < 10:
+        return False, ""
+
+    # All same digit  e.g. 1111111111
+    if len(set(nid)) == 1:
+        return True, "All-same-digit NID (likely fake)"
+
+    # All zeros
+    if all(c == '0' for c in nid):
+        return True, "All-zero NID"
+
+    # Trailing triple zero
+    if nid.endswith("000"):
+        return True, "Trailing triple-zero NID (likely fake)"
+
+    # Trailing double zero (softer warning — still suspicious)
+    if nid.endswith("00"):
+        return True, "Trailing double-zero NID (suspicious)"
+
+    # Ascending sequential run of 7+ consecutive digits (e.g. 1234567)
+    for i in range(len(nid) - 6):
+        chunk = nid[i:i+7]
+        if all(int(chunk[j+1]) == int(chunk[j]) + 1 for j in range(6)):
+            return True, "Sequential ascending digit pattern detected"
+
+    # Descending sequential run of 7+
+    for i in range(len(nid) - 6):
+        chunk = nid[i:i+7]
+        if all(int(chunk[j+1]) == int(chunk[j]) - 1 for j in range(6)):
+            return True, "Sequential descending digit pattern detected"
+
+    return False, ""
+
+
 def validate_nid(nid_raw, dob_year) -> tuple[str, str, str]:
     """Returns (final_nid, status, message)"""
     if pd.isna(nid_raw) or nid_raw is None:
         return "", "error", "Missing NID"
-        
+
     nid_str = normalize_digits(str(nid_raw)).replace(".0", "").strip()
     nid_str = _NON_DIGIT.sub('', nid_str)
-    
+
     nid_len = len(nid_str)
     if nid_len == 10:
-        return nid_str, "success", "Smart NID"
+        final_nid, status, message = nid_str, "success", "Smart NID"
     elif nid_len == 17:
-        return nid_str, "success", "Standard NID"
+        final_nid, status, message = nid_str, "success", "Standard NID"
     elif nid_len == 13:
         if dob_year:
             new_nid = f"{dob_year}{nid_str}"
-            return new_nid, "warning", "Converted 13 to 17 digits"
+            final_nid, status, message = new_nid, "warning", "Converted 13 to 17 digits"
         else:
             return nid_str, "error", "13-digit NID but missing valid DOB year"
     else:
         return nid_str, "error", f"Invalid NID length: {nid_len} digits"
+
+    # Fraud pattern check — only on structurally valid NIDs
+    is_fake, fake_reason = check_fake_nid(final_nid)
+    if is_fake:
+        return final_nid, "error", fake_reason
+
+    return final_nid, status, message
 
 def normalize_col(c: str) -> str:
     """Normalizes a column name for fuzzy matching."""

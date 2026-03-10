@@ -10,9 +10,21 @@ from .database import get_db
 from .models import User
 
 # Configuration
-SECRET_KEY = os.environ.get("JWT_SECRET", "supersecretkeyforffpdatavalidator2024")
+SECRET_KEY = os.environ.get("JWT_SECRET")
+if not SECRET_KEY or len(SECRET_KEY) < 64:
+    raise RuntimeError("FATAL: JWT_SECRET env var is missing or too short (min 64 chars). Refusing to start.")
+
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 8  # 8 hours
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 2  # Reduced to 2 hours
+
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from fastapi import Request
+
+def get_real_ip(request: Request) -> str:
+    return request.headers.get("X-Real-IP") or request.headers.get("X-Forwarded-For") or get_remote_address(request)
+
+limiter = Limiter(key_func=get_real_ip)
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
@@ -60,6 +72,12 @@ async def get_current_user(request: Request, token: str = Depends(oauth2_scheme)
     user = db.query(User).filter(User.username == username).first()
     if user is None:
         raise credentials_exception
+        
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Inactive user account"
+        )
     
     # Store in request state for middleware access
     request.state.user = user
@@ -76,9 +94,28 @@ async def get_api_key(request: Request, api_key: str = Security(api_key_header),
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="API Key missing"
         )
-    # Check if a user exists with this API key
-    user = db.query(User).filter(User.api_key == api_key).first()
+    import hashlib
+    key_hash = hashlib.sha256(api_key.encode()).hexdigest()
+    # Check if a user exists with this API key hash
+    user = db.query(User).filter(User.api_key == key_hash).first()
     if user:
+        if not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Inactive user account"
+            )
+        # Check Total Limit
+        if user.api_total_limit is not None and user.api_usage_count >= user.api_total_limit:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="API quota exceeded"
+            )
+        
+        # Update usage stats
+        user.api_usage_count += 1
+        user.api_key_last_used = datetime.utcnow()
+        db.commit()
+
         request.state.user = user
         return user
     raise HTTPException(
