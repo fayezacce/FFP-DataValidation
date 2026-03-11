@@ -129,6 +129,7 @@ class UpazilaOut(BaseModel):
     division_name: str
     district_name: str
     name: str
+    quota: int = 0
     is_active: bool
     
     class Config:
@@ -166,6 +167,24 @@ async def delete_upazila(id: int, db: Session = Depends(get_db), current_user: U
     log_audit(db, current_user, "DELETE", "upazilas", id, old_data={"name": upz_name})
     
     return {"detail": "Deleted"}
+
+class UpazilaQuotaUpdate(BaseModel):
+    quota: int
+
+@router.put("/upazilas/{id}/quota", response_model=UpazilaOut, dependencies=[Depends(PermissionChecker("manage_geo"))])
+async def update_upazila_quota(id: int, data: UpazilaQuotaUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    upz = db.query(Upazila).filter(Upazila.id == id).first()
+    if not upz:
+        raise HTTPException(status_code=404, detail="Upazila not found")
+    
+    old_quota = upz.quota
+    upz.quota = data.quota
+    db.commit()
+    db.refresh(upz)
+    
+    log_audit(db, current_user, "UPDATE", "upazilas", id, old_data={"quota": old_quota}, new_data={"quota": data.quota})
+    
+    return upz
 
 # --- Database Management ---
 

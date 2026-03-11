@@ -27,7 +27,7 @@ interface StatsEntry {
   valid: number;
 
   invalid: number;
-
+  quota: number;
   filename: string;
 
   version: number;
@@ -533,11 +533,8 @@ export default function StatisticsPage() {
 
 
       if (!divMap[div]) {
-
-        divMap[div] = { name: div, total: 0, valid: 0, invalid: 0, districts: {} };
-
+        divMap[div] = { name: div, total: 0, valid: 0, invalid: 0, quota: 0, districts: {} };
         list.push(divMap[div]);
-
       }
 
 
@@ -545,15 +542,12 @@ export default function StatisticsPage() {
       const divNode = divMap[div];
 
       if (!divNode.districts[dist]) {
-
-        divNode.districts[dist] = { name: dist, total: 0, valid: 0, invalid: 0, upazilas: [] };
-
+        divNode.districts[dist] = { name: dist, total: 0, valid: 0, invalid: 0, quota: 0, upazilas: [] };
       }
 
 
 
       const distNode = divNode.districts[dist];
-
       distNode.upazilas.push(entry);
 
 
@@ -565,14 +559,12 @@ export default function StatisticsPage() {
       distNode.valid += entry.valid;
 
       distNode.invalid += entry.invalid;
-
-
+      distNode.quota += (entry.quota || 0);
 
       divNode.total += entry.total;
-
       divNode.valid += entry.valid;
-
       divNode.invalid += entry.invalid;
+      divNode.quota += (entry.quota || 0);
 
     });
 
@@ -591,9 +583,8 @@ export default function StatisticsPage() {
     total: entries.reduce((s: number, e: StatsEntry) => s + e.total, 0),
 
     valid: entries.reduce((s: number, e: StatsEntry) => s + e.valid, 0),
-
     invalid: entries.reduce((s: number, e: StatsEntry) => s + e.invalid, 0),
-
+    quota: entries.reduce((s: number, e: StatsEntry) => s + (e.quota || 0), 0),
   });
 
 
@@ -900,32 +891,31 @@ export default function StatisticsPage() {
 
           <>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
-
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-5">
               <div className="glass-panel p-5 rounded-2xl border-t-4 border-t-blue-500">
-
                 <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Total Records</p>
-
                 <p className="text-3xl font-bold text-blue-400 mt-1">{data.grand_total.total.toLocaleString()}</p>
-
               </div>
 
               <div className="glass-panel p-5 rounded-2xl border-t-4 border-t-emerald-500">
+                <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Valid Records (Target)</p>
+                <div className="flex items-baseline gap-2 mt-1">
+                  <p className="text-3xl font-bold text-emerald-400">{data.grand_total.valid.toLocaleString()}</p>
+                  <p className="text-sm text-slate-500">/ {(data.entries.reduce((s, e) => s + (e.quota || 0), 0)).toLocaleString()}</p>
+                </div>
+              </div>
 
-                <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Valid Records</p>
-
-                <p className="text-3xl font-bold text-emerald-400 mt-1">{data.grand_total.valid.toLocaleString()}</p>
-
+              <div className="glass-panel p-5 rounded-2xl border-t-4 border-t-amber-500">
+                <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Remaining to Target</p>
+                <p className="text-3xl font-bold text-amber-400 mt-1">
+                  {Math.max(0, (data.entries.reduce((s, e) => s + (e.quota || 0), 0)) - data.grand_total.valid).toLocaleString()}
+                </p>
               </div>
 
               <div className="glass-panel p-5 rounded-2xl border-t-4 border-t-red-500">
-
                 <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Invalid Records</p>
-
                 <p className="text-3xl font-bold text-red-400 mt-1">{data.grand_total.invalid.toLocaleString()}</p>
-
               </div>
-
             </div>
 
 
@@ -965,29 +955,19 @@ export default function StatisticsPage() {
                     <tr>
 
                       <th className="px-3 md:px-5 py-3 font-medium">Division</th>
-
                       <th className="px-5 py-3 font-medium">District</th>
-
                       <th className="px-5 py-3 font-medium">Upazila</th>
-
+                      <th className="px-5 py-3 font-medium text-right">Target</th>
                       <th className="px-5 py-3 font-medium text-right">Total</th>
-
-                      <th className="px-5 py-3 font-medium text-right">Valid</th>
-
+                      <th className="px-5 py-3 font-medium text-right text-emerald-400">Valid</th>
+                      <th className="px-5 py-3 font-medium text-right text-amber-400">Rem.</th>
                       <th className="px-5 py-3 font-medium text-right">Invalid</th>
-
                       <th className="px-5 py-3 font-medium text-center">
-
                         <span className="flex items-center justify-center gap-1"><Hash className="w-3 h-3" />Ver</span>
-
                       </th>
-
                       <th className="px-5 py-3 font-medium text-center">Downloads</th>
-
                       <th className="px-3 md:px-5 py-3 font-medium cursor-default" title="Last Updated">
-
                         <span className="flex items-center gap-1"><Clock className="w-3 h-3" />Updated</span>
-
                       </th>
 
                     </tr>
@@ -1043,17 +1023,14 @@ export default function StatisticsPage() {
                                   </span>
 
                                 </div>
-
                               </div>
-
                             </td>
 
+                            <td className="px-5 py-3 text-right font-mono text-slate-400 font-bold text-base">{div.quota.toLocaleString()}</td>
                             <td className="px-5 py-3 text-right font-mono text-blue-300 font-bold text-base">{div.total.toLocaleString()}</td>
-
                             <td className="px-5 py-3 text-right font-mono text-emerald-300 font-bold text-base">{div.valid.toLocaleString()}</td>
-
+                            <td className="px-5 py-3 text-right font-mono text-amber-300 font-bold text-base">{Math.max(0, div.quota - div.valid).toLocaleString()}</td>
                             <td className="px-5 py-3 text-right font-mono text-red-300 font-bold text-base">{div.invalid.toLocaleString()}</td>
-
                             <td colSpan={3} className="px-5 py-3"></td>
 
                           </tr>
@@ -1108,12 +1085,11 @@ export default function StatisticsPage() {
 
                                   </td>
 
+                                  <td className="px-5 py-2 text-right font-mono text-slate-500 font-semibold text-sm">{dist.quota.toLocaleString()}</td>
                                   <td className="px-5 py-2 text-right font-mono text-blue-400/80 font-semibold text-sm">{dist.total.toLocaleString()}</td>
-
                                   <td className="px-5 py-2 text-right font-mono text-emerald-400/80 font-semibold text-sm">{dist.valid.toLocaleString()}</td>
-
+                                  <td className="px-5 py-2 text-right font-mono text-amber-400/80 font-semibold text-sm">{Math.max(0, dist.quota - dist.valid).toLocaleString()}</td>
                                   <td className="px-5 py-2 text-right font-mono text-red-400/80 font-semibold text-sm">{dist.invalid.toLocaleString()}</td>
-
                                   <td colSpan={3}></td>
 
                                 </tr>
@@ -1134,14 +1110,24 @@ export default function StatisticsPage() {
 
                                     <td className="px-5 py-2 text-slate-300 font-medium">{entry.upazila}</td>
 
+                                    <td className="px-5 py-2 text-right font-mono text-slate-500">{entry.quota || 0}</td>
                                     <td className="px-5 py-2 text-right font-mono text-blue-400/70">{entry.total.toLocaleString()}</td>
-
-                                    <td className="px-5 py-2 text-right font-mono text-emerald-400/70">{entry.valid.toLocaleString()}</td>
-
+                                    <td className="px-5 py-2 text-right font-mono text-emerald-400/70">
+                                      <div className="flex flex-col items-end">
+                                        <span>{entry.valid.toLocaleString()}</span>
+                                        {entry.quota > 0 && (
+                                          <div className="w-16 h-1 bg-slate-800 rounded-full mt-1 overflow-hidden">
+                                            <div
+                                              className="h-full bg-emerald-500"
+                                              style={{ width: `${Math.min(100, (entry.valid / entry.quota) * 100)}%` }}
+                                            />
+                                          </div>
+                                        )}
+                                      </div>
+                                    </td>
+                                    <td className="px-5 py-2 text-right font-mono text-amber-400/70">{Math.max(0, (entry.quota || 0) - entry.valid).toLocaleString()}</td>
                                     <td className={`px-5 py-2 text-right font-mono ${entry.invalid > 0 ? 'text-red-400/70' : 'text-emerald-400/70'}`}>
-
                                       {entry.invalid.toLocaleString()}
-
                                     </td>
 
                                     <td className="px-5 py-2 text-center">
@@ -1302,11 +1288,8 @@ export default function StatisticsPage() {
                             );
 
                           })}
-
                         </React.Fragment>
-
                       );
-
                     })}
 
                     {/* Grand Total */}
@@ -1321,12 +1304,11 @@ export default function StatisticsPage() {
 
                       </td>
 
+                      <td className="px-5 py-5 text-right font-mono text-slate-400 text-xl">{(data.entries.reduce((s, e) => s + (e.quota || 0), 0)).toLocaleString()}</td>
                       <td className="px-5 py-5 text-right font-mono text-blue-300 text-xl">{data.grand_total.total.toLocaleString()}</td>
-
                       <td className="px-5 py-5 text-right font-mono text-emerald-300 text-xl">{data.grand_total.valid.toLocaleString()}</td>
-
+                      <td className="px-5 py-5 text-right font-mono text-amber-300 text-xl">{Math.max(0, (data.entries.reduce((s, e) => s + (e.quota || 0), 0)) - data.grand_total.valid).toLocaleString()}</td>
                       <td className="px-5 py-5 text-right font-mono text-red-300 text-xl">{data.grand_total.invalid.toLocaleString()}</td>
-
                       <td colSpan={3}></td>
 
                     </tr>

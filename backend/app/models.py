@@ -62,6 +62,7 @@ class Upazila(Base):
     division_name = Column(String, index=True, nullable=False)
     district_name = Column(String, index=True, nullable=False)
     name = Column(String, index=True, nullable=False)
+    quota = Column(Integer, default=0)
     is_active = Column(Boolean, default=True)
 
     __table_args__ = (

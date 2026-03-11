@@ -40,6 +40,7 @@ export default function AdminPage() {
   // Upazila Inline Edit State
   const [editingUpzId, setEditingUpzId] = useState<number | null>(null);
   const [editingUpzName, setEditingUpzName] = useState("");
+  const [editingUpzQuota, setEditingUpzQuota] = useState<number | string>(0);
 
   // Logs State
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
@@ -359,31 +360,53 @@ export default function AdminPage() {
   };
 
   const handleSaveUpazilaInline = async (u: any) => {
-    if (!editingUpzName || editingUpzName === u.name) {
+    const nameChanged = editingUpzName && editingUpzName !== u.name;
+    const quotaChanged = editingUpzQuota !== (u.quota || 0);
+
+    if (!nameChanged && !quotaChanged) {
       setEditingUpzId(null);
       return;
     }
 
     try {
       setActionLoading(true);
-      const res = await fetchWithAuth(`${getBackendUrl()}/admin/location/rename`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          level: "upazila",
-          old_name: u.name,
-          new_name: editingUpzName,
-          parent_name: u.district_name
-        })
-      });
-      if (res.ok) {
-        showMsg("Upazila renamed successfully");
-        setEditingUpzId(null);
-        loadData();
-      } else {
-        const d = await res.json();
-        showMsg(d.detail || "Rename failed", true);
+
+      // Handle Rename if changed
+      if (nameChanged) {
+        const res = await fetchWithAuth(`${getBackendUrl()}/admin/location/rename`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            level: "upazila",
+            old_name: u.name,
+            new_name: editingUpzName,
+            parent_name: u.district_name
+          })
+        });
+        if (!res.ok) {
+          const d = await res.json();
+          showMsg(d.detail || "Rename failed", true);
+          return;
+        }
       }
+
+      // Handle Quota if changed
+      if (quotaChanged) {
+        const quotaRes = await fetchWithAuth(`${getBackendUrl()}/admin/upazilas/${u.id}/quota`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ quota: Number(editingUpzQuota) })
+        });
+        if (!quotaRes.ok) {
+          const d = await quotaRes.json();
+          showMsg(d.detail || "Quota update failed", true);
+          return;
+        }
+      }
+
+      showMsg("Upazila updated successfully");
+      setEditingUpzId(null);
+      loadData();
     } catch (err: any) { showMsg(err.message, true); }
     finally { setActionLoading(false); }
   };
@@ -858,6 +881,7 @@ export default function AdminPage() {
                         <th className="px-6 py-4 text-xs font-semibold text-gray-500 uppercase">Division</th>
                         <th className="px-6 py-4 text-xs font-semibold text-gray-500 uppercase">District</th>
                         <th className="px-6 py-4 text-xs font-semibold text-gray-500 uppercase">Upazila</th>
+                        <th className="px-6 py-4 text-xs font-semibold text-gray-500 uppercase">Quota</th>
                         <th className="px-6 py-4 text-xs font-semibold text-gray-500 uppercase text-right">Actions</th>
                       </tr>
                     </thead>
@@ -883,6 +907,18 @@ export default function AdminPage() {
                               <span className="font-bold">{u.name}</span>
                             )}
                           </td>
+                          <td className="px-6 py-4">
+                            {editingUpzId === u.id ? (
+                              <input
+                                type="number"
+                                value={editingUpzQuota}
+                                onChange={(e) => setEditingUpzQuota(e.target.value)}
+                                className="bg-[#1a1a1c] border border-cyan-500 text-white rounded px-2 py-1 outline-none w-24"
+                              />
+                            ) : (
+                              <span className="text-gray-300">{u.quota || 0}</span>
+                            )}
+                          </td>
                           <td className="px-6 py-4 text-right">
                             <div className="flex justify-end items-center space-x-3">
                               {editingUpzId === u.id ? (
@@ -893,10 +929,14 @@ export default function AdminPage() {
                               ) : (
                                 <>
                                   <button
-                                    onClick={() => { setEditingUpzId(u.id); setEditingUpzName(u.name); }}
+                                    onClick={() => {
+                                      setEditingUpzId(u.id);
+                                      setEditingUpzName(u.name);
+                                      setEditingUpzQuota(u.quota || 0);
+                                    }}
                                     className="text-emerald-500 opacity-0 group-hover:opacity-100 transition-opacity text-sm"
                                   >
-                                    Rename
+                                    Edit
                                   </button>
                                   <button onClick={() => handleDeleteUpz(u.id)} className="text-red-500 opacity-0 group-hover:opacity-100 transition-opacity text-sm">Delete</button>
                                 </>

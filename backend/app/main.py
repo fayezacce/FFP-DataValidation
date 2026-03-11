@@ -22,7 +22,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from fastapi.requests import Request
 from .database import engine, Base, get_db, SessionLocal
-from .models import User, SystemConfig, RemoteInstance, SummaryStats, ValidRecord, UploadedFile, Division, District, Upazila, Permission, RolePermission, AuditLog, ApiUsageLog, UploadBatch
+from .models import User, SystemConfig, RemoteInstance, SummaryStats, ValidRecord, InvalidRecord, UploadedFile, Division, District, Upazila, Permission, RolePermission, AuditLog, ApiUsageLog, UploadBatch
 from .auth import (
     get_current_user,
     create_access_token,
@@ -1465,9 +1465,23 @@ async def get_statistics(
     import hashlib
 
     # 1. Fetch entries (ordered for deterministic ETag)
-    entries = db.query(SummaryStats).order_by(
+    # Join with Upazila to get the latest quota set by Admin
+    entries_query = db.query(
+        SummaryStats, 
+        Upazila.quota
+    ).outerjoin(
+        Upazila, 
+        (SummaryStats.upazila == Upazila.name) & (SummaryStats.district == Upazila.district_name)
+    ).order_by(
         SummaryStats.division, SummaryStats.district, SummaryStats.upazila
     ).all()
+
+    # Convert tuples to objects for easier processing
+    entries = []
+    for s, q in entries_query:
+        # We temporarily attach quota to the SummaryStats object for consistency in the loop below
+        s.quota = q or 0
+        entries.append(s)
 
     # 2. Cheap ETag based on latest updated_at + row count
     latest_ts = max((e.updated_at for e in entries), default=datetime.utcnow())
@@ -1504,6 +1518,7 @@ async def get_statistics(
                 "total":             e.total,
                 "valid":             e.valid,
                 "invalid":           e.invalid,
+                "quota":             getattr(e, 'quota', 0),
                 "filename":          e.filename,
                 "version":           e.version,
                 "created_at":        e.created_at.isoformat() + "Z",
