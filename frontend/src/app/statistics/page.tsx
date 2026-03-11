@@ -1190,7 +1190,11 @@ export default function StatisticsPage() {
                                             >
                                               <FileText className="w-3.5 h-3.5" />
                                             </button>
+                                          </>
+                                        )}
 
+                                        {entry.invalid > 0 && (
+                                          <>
                                             <button
                                               onClick={() => downloadFileWithAuth(buildLiveExportInvalidUrl(entry, "xlsx"), entry.district + "_" + entry.upazila + "_live_invalid.xlsx")}
                                               title="Download Live Invalid XLS (all versions merged)"
@@ -1205,7 +1209,6 @@ export default function StatisticsPage() {
                                             >
                                               <FileText className="w-3.5 h-3.5" />
                                             </button>
-
                                           </>
                                         )}
 

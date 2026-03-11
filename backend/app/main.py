@@ -1339,7 +1339,8 @@ async def download_all_valid_zip(db: Session = Depends(get_db)):
     os.makedirs("downloads/temp_bulk", exist_ok=True)
     zip_filename = f"all_live_valid_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
     zip_path = os.path.join("downloads", zip_filename)
-
+    
+    print(f"DEBUG: Starting valid-zip generation for {len(entries)} entries. Path: {zip_path}")
     try:
         with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zipf:
             for entry in entries:
@@ -1391,6 +1392,7 @@ async def download_all_invalid_zip(db: Session = Depends(get_db)):
     zip_filename = f"all_live_invalid_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
     zip_path = os.path.join("downloads", zip_filename)
 
+    print(f"DEBUG: Starting invalid-zip generation for {len(entries)} entries. Path: {zip_path}")
     try:
         with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zipf:
             for entry in entries:
@@ -1427,6 +1429,7 @@ async def download_all_invalid_zip(db: Session = Depends(get_db)):
 async def download_file(filename: str, request: Request):
     # │ Security: strip any path separators to prevent directory traversal
     safe_name = os.path.basename(filename)
+    print(f"DEBUG: Download request for file: {safe_name}")
     file_path  = os.path.join("downloads", safe_name)
     # Double-check the resolved path is still inside 'downloads/'
     downloads_dir = os.path.abspath("downloads")
