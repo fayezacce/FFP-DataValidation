@@ -65,19 +65,15 @@ def check_fake_nid(nid: str) -> tuple[bool, str]:
 
     # All same digit  e.g. 1111111111
     if len(set(nid)) == 1:
-        return True, "All-same-digit NID (likely fake)"
+        return True, "All-same-digit NID"
 
     # All zeros
     if all(c == '0' for c in nid):
         return True, "All-zero NID"
 
-    # Trailing triple zero
-    if nid.endswith("000"):
-        return True, "Trailing triple-zero NID (likely fake)"
-
-    # Trailing double zero (softer warning — still suspicious)
-    if nid.endswith("00"):
-        return True, "Trailing double-zero NID (suspicious)"
+    # Trailing double zero (or more) for 17-digit NIDs only
+    if len(nid) == 17 and nid.endswith("00"):
+        return True, "Trailing double-zero NID"
 
     # Ascending sequential run of 7+ consecutive digits (e.g. 1234567)
     for i in range(len(nid) - 6):

@@ -129,9 +129,8 @@ def generate_pdf_report(
         col_widths.extend([extra_width_per_col] * len(valid_additional))
 
     total_w = sum(col_widths)
-    if total_w > total_usable_width:
-        scale = total_usable_width / total_w
-        col_widths = [w * scale for w in col_widths]
+    scale = total_usable_width / total_w
+    col_widths = [w * scale for w in col_widths]
 
     pdf.show_cols = show_cols
     pdf.col_widths = col_widths

@@ -769,9 +769,7 @@ export default function StatisticsPage() {
 
           <div className="flex gap-4">
 
-            <span className="flex items-center gap-1.5"><MapPin className="w-3.5 h-3.5" /> Items: <b>{filteredEntries.length}</b></span>
-
-            <span className="flex items-center gap-1.5"><Clock className="w-3.5 h-3.5" /> Last sync: <b>{new Date().toLocaleTimeString()}</b></span>
+            <span className="flex items-center gap-1.5"><Clock className="w-3.5 h-3.5" /> Last sync: <b>{isMounted ? new Date().toLocaleTimeString() : "--:--"}</b></span>
 
           </div>
 

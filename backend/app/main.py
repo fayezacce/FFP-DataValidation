@@ -13,7 +13,7 @@ import uvicorn
 import asyncio
 from contextlib import asynccontextmanager
 import openpyxl
-from openpyxl.styles import PatternFill
+from openpyxl.styles import PatternFill, Font
 import json
 from datetime import datetime
 from sqlalchemy.orm import Session
@@ -320,8 +320,14 @@ async def audit_api_usage_middleware(request: Request, call_next):
     # For now, we'll try to get it from the request state if available
     user = getattr(request.state, "user", None)
     if user:
-        user_id = user.id
-        username = user.username
+        user_id = getattr(request.state, "user_id", None)
+        username = getattr(request.state, "username", None)
+        if user_id is None:
+            try:
+                user_id = user.id
+                username = user.username
+            except Exception:
+                pass
         
     db = SessionLocal()
     try:
@@ -529,10 +535,21 @@ async def validate_excel(
         wb.save(excel_path)
         
         valid_mask = processed_df['Status'] != 'error'
-        export_df[valid_mask].to_excel(excel_valid_path, index=False, engine='openpyxl')
+        with pd.ExcelWriter(excel_valid_path, engine='openpyxl') as writer:
+            export_df[valid_mask].to_excel(writer, index=False, sheet_name='Valid Records')
+            ws = writer.sheets['Valid Records']
+            nikosh_font = Font(name='Nikosh', size=11)
+            for row in ws.iter_rows():
+                for cell in row:
+                    cell.font = nikosh_font
         
         invalid_mask = processed_df['Status'] == 'error'
-        export_df[invalid_mask].to_excel(excel_invalid_path, index=False, engine='openpyxl')
+        with pd.ExcelWriter(excel_invalid_path, engine='openpyxl') as writer:
+            export_df[invalid_mask].to_excel(writer, index=False, sheet_name='Invalid Records')
+            ws = writer.sheets['Invalid Records']
+            for row in ws.iter_rows():
+                for cell in row:
+                    cell.font = nikosh_font
         
     else:
         # Standard .xlsx handling
@@ -575,6 +592,12 @@ async def validate_excel(
                     cell = ws.cell(row=r, column=c)
                     if type(cell).__name__ != 'MergedCell':
                         cell.fill = yellow_fill
+        
+        # Apply Nikosh font to the tested workbook
+        nikosh_font = Font(name='Nikosh', size=11)
+        for row in ws.iter_rows():
+            for cell in row:
+                cell.font = nikosh_font
                         
         wb.save(excel_path)
         
@@ -588,10 +611,21 @@ async def validate_excel(
         export_df = export_df.drop(columns=[c for c in cols_to_drop if c in export_df.columns])
         
         valid_mask = processed_df['Status'] != 'error'
-        export_df[valid_mask].to_excel(excel_valid_path, index=False, engine='openpyxl')
+        with pd.ExcelWriter(excel_valid_path, engine='openpyxl') as writer:
+            export_df[valid_mask].to_excel(writer, index=False, sheet_name='Valid Records')
+            ws = writer.sheets['Valid Records']
+            nikosh_font = Font(name='Nikosh', size=11)
+            for row in ws.iter_rows():
+                for cell in row:
+                    cell.font = nikosh_font
         
         invalid_mask = processed_df['Status'] == 'error'
-        export_df[invalid_mask].to_excel(excel_invalid_path, index=False, engine='openpyxl')
+        with pd.ExcelWriter(excel_invalid_path, engine='openpyxl') as writer:
+            export_df[invalid_mask].to_excel(writer, index=False, sheet_name='Invalid Records')
+            ws = writer.sheets['Invalid Records']
+            for row in ws.iter_rows():
+                for cell in row:
+                    cell.font = nikosh_font
     
     # Prepare preview data (first 50 rows)
     preview_df = processed_df.head(50).replace({float('nan'): None})
@@ -809,11 +843,11 @@ async def validate_excel(
         summary.last_upload_duplicate = len(cross_upazila_duplicates)
         summary.version = current_version
         summary.filename = file.filename
-        summary.pdf_url = f"/downloads/{urllib.parse.quote(filename)}"
-        summary.pdf_invalid_url = f"/downloads/{urllib.parse.quote(pdf_invalid_filename)}" if pdf_invalid_filename else ""
-        summary.excel_url = f"/downloads/{urllib.parse.quote(excel_filename)}" if excel_filename else ""
-        summary.excel_valid_url = f"/downloads/{urllib.parse.quote(excel_valid_filename)}" if excel_valid_filename else ""
-        summary.excel_invalid_url = f"/downloads/{urllib.parse.quote(excel_invalid_filename)}" if excel_invalid_filename else ""
+        summary.pdf_url = f"/api/downloads/{urllib.parse.quote(filename)}"
+        summary.pdf_invalid_url = f"/api/downloads/{urllib.parse.quote(pdf_invalid_filename)}" if pdf_invalid_filename else ""
+        summary.excel_url = f"/api/downloads/{urllib.parse.quote(excel_filename)}" if excel_filename else ""
+        summary.excel_valid_url = f"/api/downloads/{urllib.parse.quote(excel_valid_filename)}" if excel_valid_filename else ""
+        summary.excel_invalid_url = f"/api/downloads/{urllib.parse.quote(excel_invalid_filename)}" if excel_invalid_filename else ""
     else:
         summary = SummaryStats(
             division=geo["division"],
@@ -829,11 +863,11 @@ async def validate_excel(
             last_upload_updated=updated_count,
             last_upload_duplicate=len(cross_upazila_duplicates),
             filename=file.filename,
-            pdf_url=f"/downloads/{urllib.parse.quote(filename)}",
-            pdf_invalid_url=f"/downloads/{urllib.parse.quote(pdf_invalid_filename)}" if pdf_invalid_filename else "",
-            excel_url=f"/downloads/{urllib.parse.quote(excel_filename)}" if excel_filename else "",
-            excel_valid_url=f"/downloads/{urllib.parse.quote(excel_valid_filename)}" if excel_valid_filename else "",
-            excel_invalid_url=f"/downloads/{urllib.parse.quote(excel_invalid_filename)}" if excel_invalid_filename else "",
+            pdf_url=f"/api/downloads/{urllib.parse.quote(filename)}",
+            pdf_invalid_url=f"/api/downloads/{urllib.parse.quote(pdf_invalid_filename)}" if pdf_invalid_filename else "",
+            excel_url=f"/api/downloads/{urllib.parse.quote(excel_filename)}" if excel_filename else "",
+            excel_valid_url=f"/api/downloads/{urllib.parse.quote(excel_valid_filename)}" if excel_valid_filename else "",
+            excel_invalid_url=f"/api/downloads/{urllib.parse.quote(excel_invalid_filename)}" if excel_invalid_filename else "",
         )
         db.add(summary)
     
@@ -870,11 +904,11 @@ async def validate_excel(
         "batch_id": batch.id,
         "version": summary.version,
         "updated_at": summary.updated_at.isoformat() + "Z",
-        "pdf_url": f"/downloads/{urllib.parse.quote(filename)}",
-        "pdf_invalid_url": f"/downloads/{urllib.parse.quote(pdf_invalid_filename)}",
-        "excel_url": f"/downloads/{urllib.parse.quote(excel_filename)}",
-        "excel_valid_url": f"/downloads/{urllib.parse.quote(excel_valid_filename)}",
-        "excel_invalid_url": f"/downloads/{urllib.parse.quote(excel_invalid_filename)}",
+        "pdf_url": f"/api/downloads/{urllib.parse.quote(filename)}",
+        "pdf_invalid_url": f"/api/downloads/{urllib.parse.quote(pdf_invalid_filename)}",
+        "excel_url": f"/api/downloads/{urllib.parse.quote(excel_filename)}",
+        "excel_valid_url": f"/api/downloads/{urllib.parse.quote(excel_valid_filename)}",
+        "excel_invalid_url": f"/api/downloads/{urllib.parse.quote(excel_invalid_filename)}",
         "preview_data": preview_data
     }
 
@@ -911,10 +945,19 @@ async def get_upazila_history(
     upazila: str,
     db: Session = Depends(get_db)
 ):
-    """Return upload history for a specific upazila."""
+    """Return upload history for a specific upazila, validated against official names."""
+    # First, let's make sure we are using the official names if possible
+    # This handles the case where the frontend sends a slightly mismatched name
+    official = db.query(Upazila).filter(
+        (Upazila.name.ilike(upazila)) & (Upazila.district_name.ilike(district))
+    ).first()
+    
+    target_upazila = official.name if official else upazila
+    target_district = official.district_name if official else district
+
     batches = db.query(UploadBatch).filter(
-        UploadBatch.district == district,
-        UploadBatch.upazila == upazila
+        UploadBatch.district == target_district,
+        UploadBatch.upazila == target_upazila
     ).order_by(UploadBatch.created_at.desc()).all()
     return batches
 
@@ -965,85 +1008,94 @@ async def delete_batch(
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LIVE EXPORT  — always fresh from DB, all versions merged
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LIVE EXPORT HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.get("/upazila/live-export", dependencies=[Depends(PermissionChecker("view_stats"))])
-async def upazila_live_export(
-    division: str,
-    district: str,
-    upazila: str,
-    fmt: str = "pdf",   # xlsx | pdf
-    db: Session = Depends(get_db),
-):
-    """Stream a freshly generated export of ALL valid records for the upazila across all batches."""
-    records = (
-        db.query(ValidRecord)
-        .filter(
-            ValidRecord.division == division,
-            ValidRecord.district == district,
-            ValidRecord.upazila  == upazila,
+def _get_live_records_df(db: Session, division: str, district: str, upazila: str, is_invalid: bool = False):
+    """Fetch live records and return a formatted DataFrame."""
+    if is_invalid:
+        records = (
+            db.query(InvalidRecord)
+            .filter(
+                InvalidRecord.division == division,
+                InvalidRecord.district == district,
+                InvalidRecord.upazila  == upazila,
+            )
+            .order_by(InvalidRecord.id.desc())
+            .all()
         )
-        .order_by(ValidRecord.id.desc())
-        .all()
-    )
+    else:
+        records = (
+            db.query(ValidRecord)
+            .filter(
+                ValidRecord.division == division,
+                ValidRecord.district == district,
+                ValidRecord.upazila  == upazila,
+            )
+            .order_by(ValidRecord.nid)
+            .all()
+        )
 
     if not records:
-        raise HTTPException(status_code=404, detail="No valid records found for this upazila")
+        return None
 
     rows = []
     for r in records:
-        base = {
+        # Base columns
+        row = {
             "Excel_Row": r.data.get("Excel_Row", "") if r.data else "",
             "NID":      r.nid,
             "Cleaned_NID": r.nid,
             "DOB":      r.dob,
             "Cleaned_DOB": r.dob,
             "Name":     r.name,
-            "Status":   "valid",
-            "Message":  "",
             "Division": r.division,
             "District": r.district,
             "Upazila":  r.upazila,
             "Batch_ID": r.batch_id,
             "Source_File": r.source_file,
         }
+        
+        if is_invalid:
+            row["Status"] = "error"
+            row["Message"] = r.error_message
+        else:
+            row["Status"] = "valid"
+            row["Message"] = ""
+
+        # Overlay original columns from JSON data
         if r.data and isinstance(r.data, dict):
             for k, v in r.data.items():
-                if k not in base and k not in ["Status", "Message", "Excel_Row", "Cleaned_DOB", "Cleaned_NID"]:
-                    base[k] = v
-        rows.append(base)
+                if k not in row and k not in ["Status", "Message", "Excel_Row", "Cleaned_DOB", "Cleaned_NID"]:
+                    row[k] = v
+        rows.append(row)
 
-    df = pd.DataFrame(rows)
+    return pd.DataFrame(rows)
 
-    safe_name = f"{district}_{upazila}".replace(" ", "_").replace("/", "_")
-    os.makedirs("downloads/live", exist_ok=True)
-
-    if fmt == "pdf":
-        stats = {"total_rows": len(df), "issues": 0, "converted_nid": 0}
-        geo   = {"division": division, "district": district, "upazila": upazila}
-        path = generate_pdf_report(
-            df, stats,
-            additional_columns=[c for c in df.columns if c not in
-                                 ["Status","Message","Excel_Row","Cleaned_DOB","Cleaned_NID", "NID", "DOB", "Batch_ID", "Source_File", "Division", "District", "Upazila"]],
-            output_dir="downloads/live",
-            original_filename=safe_name + "_live_valid",
-            geo=geo,
-            invalid_only=False
-        )
-        media = "application/pdf"
-        dl_name = f"{safe_name}_live_valid.pdf"
+def _save_live_excel_nikosh(df: pd.DataFrame, path: str, sheet_name: str, is_valid: bool = True):
+    """Save DataFrame to Excel with Nikosh font and column filtering."""
+    if is_valid:
+        # Columns to remove for valid export as requested
+        exclude = ["Excel_Row", "NID", "Cleaned_NID", "DOB", "Cleaned_DOB", 
+                   "Name", "Status", "Message", "Division", "District", 
+                   "Upazila", "Batch_ID", "Source_File"]
     else:
-        path = os.path.join("downloads/live", f"{safe_name}_live_valid.xlsx")
-        df.to_excel(path, index=False)
-        media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        dl_name = f"{safe_name}_live_valid.xlsx"
-
-    return FileResponse(
-        path=path,
-        media_type=media,
-        filename=dl_name,
-        headers={"Cache-Control": "no-cache"}
-    )
+        # Columns to remove for invalid export
+        exclude = ["Cleaned_DOB", "Cleaned_NID", "Status"]
+        
+    export_df = df.drop(columns=[c for c in exclude if c in df.columns])
+    
+    with pd.ExcelWriter(path, engine='openpyxl') as writer:
+        export_df.to_excel(writer, index=False, sheet_name=sheet_name)
+        worksheet = writer.sheets[sheet_name]
+        
+        from openpyxl.styles import Font
+        nikosh_font = Font(name='Nikosh', size=11)
+        for row in worksheet.iter_rows():
+            for cell in row:
+                cell.font = nikosh_font
 
 @app.get("/upazila/live-export-invalid", dependencies=[Depends(PermissionChecker("view_stats"))])
 async def upazila_live_export_invalid(
@@ -1053,45 +1105,10 @@ async def upazila_live_export_invalid(
     fmt: str = "pdf",   # xlsx | pdf
     db: Session = Depends(get_db),
 ):
-    """Stream a freshly generated export of ALL invalid records for the upazila across all batches."""
-    records = (
-        db.query(InvalidRecord)
-        .filter(
-            InvalidRecord.division == division,
-            InvalidRecord.district == district,
-            InvalidRecord.upazila  == upazila,
-        )
-        .order_by(InvalidRecord.id.desc())
-        .all()
-    )
-
-    if not records:
+    """Stream a freshly generated export of ALL invalid records for the upazila."""
+    df = _get_live_records_df(db, division, district, upazila, is_invalid=True)
+    if df is None:
         raise HTTPException(status_code=404, detail="No invalid records found for this upazila")
-
-    rows = []
-    for r in records:
-        base = {
-            "Excel_Row": r.data.get("Excel_Row", ""),
-            "NID":      r.nid,
-            "Cleaned_NID": r.nid,
-            "DOB":      r.dob,
-            "Cleaned_DOB": r.dob,
-            "Name":     r.name,
-            "Status":   "error",
-            "Message":  r.error_message,
-            "Division": r.division,
-            "District": r.district,
-            "Upazila":  r.upazila,
-            "Batch_ID": r.batch_id,
-            "Source_File": r.source_file,
-        }
-        if r.data and isinstance(r.data, dict):
-            for k, v in r.data.items():
-                if k not in base and k not in ["Status", "Message", "Excel_Row", "Cleaned_DOB", "Cleaned_NID"]:
-                    base[k] = v
-        rows.append(base)
-
-    df = pd.DataFrame(rows)
 
     safe_name = f"{district}_{upazila}".replace(" ", "_").replace("/", "_")
     os.makedirs("downloads/live", exist_ok=True)
@@ -1112,9 +1129,7 @@ async def upazila_live_export_invalid(
         dl_name = f"{safe_name}_live_invalid.pdf"
     else:
         path = os.path.join("downloads", "live", f"{safe_name}_live_invalid.xlsx")
-        # cleanup columns for excel
-        export_df = df.drop(columns=["Cleaned_DOB", "Cleaned_NID", "Status"])
-        export_df.to_excel(path, index=False)
+        _save_live_excel_nikosh(df, path, "Invalid Records", is_valid=False)
         media   = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         dl_name = f"{safe_name}_live_invalid.xlsx"
 
@@ -1129,46 +1144,10 @@ async def upazila_live_export(
     fmt: str = "xlsx",   # xlsx | pdf
     db: Session = Depends(get_db),
 ):
-    """Stream a freshly generated export of ALL valid records for the upazila.
-
-    Parameters
-    ----------
-    fmt : 'xlsx' or 'pdf'
-    """
-    records = (
-        db.query(ValidRecord)
-        .filter(
-            ValidRecord.division == division,
-            ValidRecord.district == district,
-            ValidRecord.upazila  == upazila,
-        )
-        .order_by(ValidRecord.nid)
-        .all()
-    )
-
-    if not records:
+    """Stream a freshly generated export of ALL valid records for the upazila."""
+    df = _get_live_records_df(db, division, district, upazila, is_invalid=False)
+    if df is None:
         raise HTTPException(status_code=404, detail="No valid records found for this upazila")
-
-    # Build a flat DataFrame from stored JSON data + key columns
-    rows = []
-    for r in records:
-        base = {
-            "NID":      r.nid,
-            "DOB":      r.dob,
-            "Name":     r.name,
-            "Division": r.division,
-            "District": r.district,
-            "Upazila":  r.upazila,
-            "Batch_ID": r.batch_id,
-            "Source_File": r.source_file,
-        }
-        if r.data and isinstance(r.data, dict):
-            for k, v in r.data.items():
-                if k not in base:
-                    base[k] = v
-        rows.append(base)
-
-    df = pd.DataFrame(rows)
 
     safe_name = f"{district}_{upazila}".replace(" ", "_").replace("/", "_")
     os.makedirs("downloads/live", exist_ok=True)
@@ -1176,7 +1155,7 @@ async def upazila_live_export(
     if fmt == "pdf":
         stats = {"total_rows": len(df), "issues": 0, "converted_nid": 0}
         geo   = {"division": division, "district": district, "upazila": upazila}
-        # Add Status = success so PDF colours as valid
+        # Add metadata for PDF colouring
         df["Status"]  = "success"
         df["Message"] = "Valid record"
         df["Excel_Row"] = range(2, len(df) + 2)
@@ -1194,7 +1173,7 @@ async def upazila_live_export(
         dl_name = f"{safe_name}_live_valid.pdf"
     else:
         path = os.path.join("downloads", "live", f"{safe_name}_live_valid.xlsx")
-        df.to_excel(path, index=False)
+        _save_live_excel_nikosh(df, path, "Valid Records", is_valid=True)
         media   = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         dl_name = f"{safe_name}_live_valid.xlsx"
 
@@ -1332,10 +1311,10 @@ async def upazila_batch_files(
             "new_records":   b.new_records,
             "updated_records": b.updated_records,
             # Archive URLs — these are the static files saved at upload time
-            "valid_url":   f"/downloads/{urllib.parse.quote(safe + '_valid.xlsx')}",
-            "invalid_url": f"/downloads/{urllib.parse.quote(safe + '_invalid.xlsx')}",
-            "pdf_url":     f"/downloads/{urllib.parse.quote(safe + '_validation_Report.pdf')}",
-            "pdf_invalid_url": f"/downloads/{urllib.parse.quote(safe + '_invalid_Report.pdf')}",
+            "valid_url":   f"/api/downloads/{urllib.parse.quote(safe + '_valid.xlsx')}",
+            "invalid_url": f"/api/downloads/{urllib.parse.quote(safe + '_invalid.xlsx')}",
+            "pdf_url":     f"/api/downloads/{urllib.parse.quote(safe + '_validation_Report.pdf')}",
+            "pdf_invalid_url": f"/api/downloads/{urllib.parse.quote(safe + '_invalid_Report.pdf')}",
         }
         # Check which files actually exist on disk
         for key in ("valid_url", "invalid_url", "pdf_url", "pdf_invalid_url"):
@@ -1348,91 +1327,101 @@ async def upazila_batch_files(
 
 @app.get("/downloads/valid-zip", dependencies=[Depends(PermissionChecker("view_stats"))])
 async def download_all_valid_zip(db: Session = Depends(get_db)):
-    """Zip all valid Excel files organised as Division/DistrictName_UpazilaName_valid.xlsx."""
+    """Zip all live valid records for all upazilas, applying Nikosh font and filtering."""
+    # Query SummaryStats to know which upazilas have valid records
     entries = db.query(SummaryStats).filter(
-        SummaryStats.excel_valid_url != "",
-        SummaryStats.excel_valid_url.isnot(None)
+        SummaryStats.valid > 0
     ).order_by(SummaryStats.division, SummaryStats.district, SummaryStats.upazila).all()
 
     if not entries:
-        raise HTTPException(status_code=404, detail="No valid Excel files found to download")
+        raise HTTPException(status_code=404, detail="No valid records found in system")
 
-    os.makedirs("downloads", exist_ok=True)
-    zip_filename = f"all_valid_files_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+    os.makedirs("downloads/temp_bulk", exist_ok=True)
+    zip_filename = f"all_live_valid_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
     zip_path = os.path.join("downloads", zip_filename)
 
     try:
         with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zipf:
             for entry in entries:
-                local_filename = urllib.parse.unquote(os.path.basename(entry.excel_valid_url))
-                local_file_path = os.path.join("downloads", local_filename)
-
-                if not os.path.exists(local_file_path):
+                df = _get_live_records_df(db, entry.division, entry.district, entry.upazila, is_invalid=False)
+                if df is None:
                     continue
 
                 div  = str(entry.division or "Unknown").replace(" ", "_").replace("/", "_")
                 dist = str(entry.district or "Unknown").replace(" ", "_").replace("/", "_")
                 upz  = str(entry.upazila  or "Unknown").replace(" ", "_").replace("/", "_")
 
-                # Division folder  →  DistrictName_UpazilaName_valid.xlsx
-                zip_entry_name = f"{div}/{dist}_{upz}_valid.xlsx"
-                zipf.write(local_file_path, arcname=zip_entry_name)
+                # Temp file for this upazila
+                temp_file = os.path.join("downloads/temp_bulk", f"{dist}_{upz}_valid.xlsx")
+                _save_live_excel_nikosh(df, temp_file, "Valid Records", is_valid=True)
 
-        if os.path.getsize(zip_path) == 0:
-            os.remove(zip_path)
-            raise HTTPException(status_code=404, detail="Zip file is empty (no files on disk)")
+                # Add to zip: Division/DistrictName_UpazilaName_valid.xlsx
+                zipf.write(temp_file, arcname=f"{div}/{dist}_{upz}_valid.xlsx")
+                
+                # Cleanup individual file after adding to zip
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
 
-        return FileResponse(zip_path, media_type="application/zip", filename="All_Valid_Files.zip")
+        if not os.path.exists(zip_path) or os.path.getsize(zip_path) < 100: # zip header is ~22 bytes
+            if os.path.exists(zip_path): os.remove(zip_path)
+            raise HTTPException(status_code=404, detail="Zip file generation failed or empty")
+
+        return FileResponse(zip_path, media_type="application/zip", filename="All_Live_Valid_Records.zip")
     except Exception as e:
-        if os.path.exists(zip_path):
-            os.remove(zip_path)
-        raise HTTPException(status_code=500, detail=f"Failed to create zip: {str(e)}")
+        if os.path.exists(zip_path): os.remove(zip_path)
+        raise HTTPException(status_code=500, detail=f"Failed to create live valid zip: {str(e)}")
+    finally:
+        # Final cleanup of temp dir if needed
+        import shutil
+        if os.path.exists("downloads/temp_bulk"):
+            shutil.rmtree("downloads/temp_bulk")
 
 
 @app.get("/downloads/invalid-zip", dependencies=[Depends(PermissionChecker("view_stats"))])
 async def download_all_invalid_zip(db: Session = Depends(get_db)):
-    """Zip all invalid Excel files organised as Division/DistrictName_UpazilaName_invalid.xlsx."""
+    """Zip all live invalid records for all upazilas, applying Nikosh font."""
     entries = db.query(SummaryStats).filter(
-        SummaryStats.excel_invalid_url != "",
-        SummaryStats.excel_invalid_url.isnot(None)
+        SummaryStats.invalid > 0
     ).order_by(SummaryStats.division, SummaryStats.district, SummaryStats.upazila).all()
 
     if not entries:
-        raise HTTPException(status_code=404, detail="No invalid Excel files found to download")
+        raise HTTPException(status_code=404, detail="No invalid records found in system")
 
-    os.makedirs("downloads", exist_ok=True)
-    zip_filename = f"all_invalid_files_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+    os.makedirs("downloads/temp_bulk_invalid", exist_ok=True)
+    zip_filename = f"all_live_invalid_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
     zip_path = os.path.join("downloads", zip_filename)
 
     try:
         with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zipf:
             for entry in entries:
-                if not entry.invalid or entry.invalid == 0:
-                    continue  # skip upazilas with zero invalid records
-
-                local_filename = urllib.parse.unquote(os.path.basename(entry.excel_invalid_url))
-                local_file_path = os.path.join("downloads", local_filename)
-
-                if not os.path.exists(local_file_path):
+                df = _get_live_records_df(db, entry.division, entry.district, entry.upazila, is_invalid=True)
+                if df is None:
                     continue
 
                 div  = str(entry.division or "Unknown").replace(" ", "_").replace("/", "_")
                 dist = str(entry.district or "Unknown").replace(" ", "_").replace("/", "_")
                 upz  = str(entry.upazila  or "Unknown").replace(" ", "_").replace("/", "_")
 
-                # Division folder  →  DistrictName_UpazilaName_invalid.xlsx
-                zip_entry_name = f"{div}/{dist}_{upz}_invalid.xlsx"
-                zipf.write(local_file_path, arcname=zip_entry_name)
+                temp_file = os.path.join("downloads/temp_bulk_invalid", f"{dist}_{upz}_invalid.xlsx")
+                _save_live_excel_nikosh(df, temp_file, "Invalid Records", is_valid=False)
 
-        if os.path.getsize(zip_path) == 0:
-            os.remove(zip_path)
-            raise HTTPException(status_code=404, detail="Zip file is empty (no invalid files on disk)")
+                zipf.write(temp_file, arcname=f"{div}/{dist}_{upz}_invalid.xlsx")
+                
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
 
-        return FileResponse(zip_path, media_type="application/zip", filename="All_Invalid_Files.zip")
+        if not os.path.exists(zip_path) or os.path.getsize(zip_path) < 100:
+            if os.path.exists(zip_path): os.remove(zip_path)
+            raise HTTPException(status_code=404, detail="Zip file generation failed or empty")
+
+        return FileResponse(zip_path, media_type="application/zip", filename="All_Live_Invalid_Records.zip")
     except Exception as e:
-        if os.path.exists(zip_path):
-            os.remove(zip_path)
-        raise HTTPException(status_code=500, detail=f"Failed to create zip: {str(e)}")
+        if os.path.exists(zip_path): os.remove(zip_path)
+        raise HTTPException(status_code=500, detail=f"Failed to create live invalid zip: {str(e)}")
+    finally:
+        import shutil
+        if os.path.exists("downloads/temp_bulk_invalid"):
+            shutil.rmtree("downloads/temp_bulk_invalid")
 
 @app.get("/downloads/{filename}")
 async def download_file(filename: str, request: Request):
@@ -1461,30 +1450,49 @@ async def get_statistics(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Return accumulated stats with ETag caching — clients skip re-render on 304."""
+    """Return accumulated stats derived from official Upazila table + SummaryStats."""
     import hashlib
 
-    # 1. Fetch entries (ordered for deterministic ETag)
-    # Join with Upazila to get the latest quota set by Admin
+    # 1. Fetch ALL active upazilas and join with their summary stats
+    # This ensures that even upazilas with no uploads yet appear in the list with official names.
     entries_query = db.query(
-        SummaryStats, 
-        Upazila.quota
+        Upazila,
+        SummaryStats
     ).outerjoin(
-        Upazila, 
-        (SummaryStats.upazila == Upazila.name) & (SummaryStats.district == Upazila.district_name)
+        SummaryStats, 
+        (Upazila.name == SummaryStats.upazila) & (Upazila.district_name == SummaryStats.district)
+    ).filter(
+        Upazila.is_active == True
     ).order_by(
-        SummaryStats.division, SummaryStats.district, SummaryStats.upazila
+        Upazila.division_name, Upazila.district_name, Upazila.name
     ).all()
 
-    # Convert tuples to objects for easier processing
+    # Convert to objects for easier processing
     entries = []
-    for s, q in entries_query:
-        # We temporarily attach quota to the SummaryStats object for consistency in the loop below
-        s.quota = q or 0
-        entries.append(s)
+    for u, s in entries_query:
+        # Create a combined object that matches the expected StatsEntry interface
+        entry_data = {
+            "division": u.division_name,
+            "district": u.district_name,
+            "upazila": u.name,
+            "total": s.total if s else 0,
+            "valid": s.valid if s else 0,
+            "invalid": s.invalid if s else 0,
+            "quota": u.quota or 0,
+            "filename": s.filename if s else "",
+            "version": s.version if s else 0,
+            "created_at": (s.created_at if s else datetime.utcnow()),
+            "updated_at": (s.updated_at if s else datetime.utcnow()),
+            "pdf_url": s.pdf_url if s else "",
+            "pdf_invalid_url": s.pdf_invalid_url if s else "",
+            "excel_url": s.excel_url if s else "",
+            "excel_valid_url": s.excel_valid_url if s else "",
+            "excel_invalid_url": s.excel_invalid_url if s else "",
+        }
+        entries.append(entry_data)
 
     # 2. Cheap ETag based on latest updated_at + row count
-    latest_ts = max((e.updated_at for e in entries), default=datetime.utcnow())
+    latest_ts = max((e['updated_at'] for e in entries), default=datetime.utcnow())
     etag_raw  = f"{len(entries)}:{latest_ts.isoformat()}"
     etag      = '"' + hashlib.md5(etag_raw.encode()).hexdigest() + '"'
 
@@ -1492,13 +1500,13 @@ async def get_statistics(
         from fastapi.responses import Response as FResponse
         return FResponse(status_code=304, headers={"ETag": etag})
 
-    # 3. Master counts
-    div_master  = db.query(District.division_name, func.count(District.id)).group_by(District.division_name).all()
+    # 3. Master counts (derive from official tables)
+    div_master  = db.query(Division.name, func.count(District.id)).join(District, Division.name == District.division_name).group_by(Division.name).all()
     div_counts  = {row[0]: row[1] for row in div_master}
-    dist_master = db.query(Upazila.district_name,  func.count(Upazila.id)).group_by(Upazila.district_name).all()
+    dist_master = db.query(District.name,  func.count(Upazila.id)).join(Upazila, District.name == Upazila.district_name).group_by(District.name).all()
     dist_counts = {row[0]: row[1] for row in dist_master}
 
-    # 4. Grand total (avoid Python loop — delegate to DB on large sets)
+    # 4. Grand total (Sum up the SummaryStats)
     grand = db.query(
         func.coalesce(func.sum(SummaryStats.total),   0).label("total"),
         func.coalesce(func.sum(SummaryStats.valid),    0).label("valid"),
@@ -1507,28 +1515,13 @@ async def get_statistics(
     grand_total = {"total": grand.total, "valid": grand.valid, "invalid": grand.invalid}
 
     from fastapi.responses import JSONResponse
-    import json
-
+    
     data = {
         "entries": [
             {
-                "division":          e.division,
-                "district":          e.district,
-                "upazila":           e.upazila,
-                "total":             e.total,
-                "valid":             e.valid,
-                "invalid":           e.invalid,
-                "quota":             getattr(e, 'quota', 0),
-                "filename":          e.filename,
-                "version":           e.version,
-                "created_at":        e.created_at.isoformat() + "Z",
-                "updated_at":        e.updated_at.isoformat() + "Z",
-                "pdf_url":           e.pdf_url,
-                "pdf_invalid_url":   e.pdf_invalid_url,
-                "excel_url":         e.excel_url,
-                "excel_valid_url":   e.excel_valid_url,
-                "excel_invalid_url": e.excel_invalid_url,
-                # Include master counts per entry so client can show progress bars
+                **e,
+                "created_at": e["created_at"].isoformat() + "Z",
+                "updated_at": e["updated_at"].isoformat() + "Z",
                 "master_counts": {
                     "divisions": div_counts,
                     "districts": dist_counts,
@@ -1540,7 +1533,6 @@ async def get_statistics(
         "master_counts": {"divisions": div_counts, "districts": dist_counts},
         "last_modified": latest_ts.isoformat() + "Z",
     }
-
     return JSONResponse(
         content=data,
         headers={"ETag": etag, "Cache-Control": "private, no-store"},

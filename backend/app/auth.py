@@ -81,6 +81,8 @@ async def get_current_user(request: Request, token: str = Depends(oauth2_scheme)
     
     # Store in request state for middleware access
     request.state.user = user
+    request.state.user_id = user.id
+    request.state.username = user.username
     return user
 
 from fastapi import Security
@@ -127,6 +129,8 @@ async def get_api_key(request: Request, api_key: str = Security(api_key_header),
         db.commit()
 
         request.state.user = user
+        request.state.user_id = user.id
+        request.state.username = user.username
         return user
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,

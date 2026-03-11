@@ -231,7 +231,19 @@ export default function Home() {
 
   const loadSheetData = (wb: XLSX.WorkBook, sheetName: string, headerIdxOffset: number) => {
     const worksheet = wb.Sheets[sheetName];
-    const json = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
+    
+    // Force spreadsheet range to start at A1 so that indexing exactly matches pandas regardless of empty first rows
+    const ref = worksheet['!ref'];
+    if (ref) {
+      const range = XLSX.utils.decode_range(ref);
+      if (range.s.r > 0) {
+        range.s.r = 0;
+        worksheet['!ref'] = XLSX.utils.encode_range(range);
+      }
+    }
+    
+    // Ensure blankrows: true is set to count completely empty rows correctly
+    const json = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: true }) as any[][];
     (window as any).__raw_wb_json = json;
 
     if (json.length > 0) {
