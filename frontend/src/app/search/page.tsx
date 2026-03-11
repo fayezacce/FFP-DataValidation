@@ -3,7 +3,11 @@
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Search as SearchIcon, Database, MapPin, Clock, FileText, User, Hash, Trash2, AlertTriangle, X, ChevronDown } from "lucide-react";
+import {
+  ArrowLeft, Search as SearchIcon, Database, MapPin, Clock,
+  FileText, User, Hash, Trash2, AlertTriangle, X,
+  ChevronDown, ChevronLeft, ChevronRight, ToggleLeft, ToggleRight
+} from "lucide-react";
 import { fetchWithAuth, getBackendUrl, isAuthenticated } from "@/lib/auth";
 
 interface ValidRecord {
@@ -21,10 +25,21 @@ interface ValidRecord {
   updated_at?: string;
 }
 
+interface SearchResponse {
+  results: ValidRecord[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
 export default function SearchPage() {
   const [query, setQuery] = useState("");
   const [searchType, setSearchType] = useState<"nid" | "dob" | "name">("nid");
+  const [useRegex, setUseRegex] = useState(false);
   const [results, setResults] = useState<ValidRecord[]>([]);
+  const [totalRecords, setTotalRecords] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize] = useState(50);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<ValidRecord | null>(null);
@@ -38,18 +53,20 @@ export default function SearchPage() {
     }
   }, [router]);
 
-
-  const handleSearch = async (e?: React.FormEvent) => {
+  const handleSearch = async (e?: React.FormEvent, page: number = 1) => {
     if (e) e.preventDefault();
     if (!query.trim()) return;
 
     setLoading(true);
     setSearched(true);
+    setCurrentPage(page);
     try {
-      const res = await fetchWithAuth(`${getBackendUrl()}/search?query=${encodeURIComponent(query.trim())}&type=${searchType}`);
+      const url = `${getBackendUrl()}/search?query=${encodeURIComponent(query.trim())}&type=${searchType}&page=${page}&limit=${pageSize}&regex=${useRegex}`;
+      const res = await fetchWithAuth(url);
       if (!res.ok) throw new Error("Search failed");
-      const data = await res.json();
-      setResults(data);
+      const data: SearchResponse = await res.json();
+      setResults(data.results);
+      setTotalRecords(data.total);
     } catch (err) {
       console.error(err);
       alert("Error performing search. Make sure the backend is running.");
@@ -57,6 +74,8 @@ export default function SearchPage() {
       setLoading(false);
     }
   };
+
+  const totalPages = Math.ceil(totalRecords / pageSize);
 
   const handleDelete = async (record: ValidRecord) => {
     setDeleting(true);
@@ -66,8 +85,8 @@ export default function SearchPage() {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || "Delete failed");
       }
-      // Remove from results
       setResults(prev => prev.filter(r => r.id !== record.id));
+      setTotalRecords(prev => prev - 1);
       setDeleteConfirm(null);
       if (selectedRecord?.id === record.id) setSelectedRecord(null);
     } catch (err: any) {
@@ -88,7 +107,7 @@ export default function SearchPage() {
   };
 
   const placeholders: Record<string, string> = {
-    nid: "Enter NID (e.g. 1990123456789)",
+    nid: useRegex ? "Regex NID (e.g. 1973.*)" : "Enter NID (e.g. 1990123456789)",
     dob: "Enter DOB (e.g. 15-05-1990)",
     name: "Enter name to search..."
   };
@@ -96,7 +115,7 @@ export default function SearchPage() {
   return (
     <main className="min-h-screen p-4 md:p-8 lg:p-12 text-slate-200 flex flex-col items-center">
       <div className="max-w-6xl w-full space-y-8">
-        
+
         {/* Header */}
         <header className="flex items-center justify-between">
           <div className="flex items-center gap-4">
@@ -118,40 +137,58 @@ export default function SearchPage() {
 
         {/* Search Bar */}
         <div className="glass-panel p-6 rounded-2xl border border-slate-700/50 bg-slate-800/30 backdrop-blur-xl">
-          <form onSubmit={handleSearch} className="flex gap-3 flex-wrap">
-            {/* Search Type Selector */}
-            <div className="relative">
-              <select
-                value={searchType}
-                onChange={(e) => setSearchType(e.target.value as "nid" | "dob" | "name")}
-                className="appearance-none bg-slate-900/80 border border-slate-700 rounded-xl px-4 py-3 pr-10 text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 cursor-pointer font-medium text-sm"
-              >
-                <option value="nid">🔢 NID</option>
-                <option value="dob">📅 DOB</option>
-                <option value="name">👤 Name</option>
-              </select>
-              <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 pointer-events-none" />
-            </div>
-            
-            <div className="relative flex-1 min-w-[200px]">
-              <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
-                <SearchIcon className="h-5 w-5 text-slate-500" />
+          <form onSubmit={(e) => handleSearch(e)} className="flex flex-col gap-4">
+            <div className="flex gap-3 flex-wrap">
+              {/* Search Type Selector */}
+              <div className="relative">
+                <select
+                  value={searchType}
+                  onChange={(e) => setSearchType(e.target.value as "nid" | "dob" | "name")}
+                  className="appearance-none bg-slate-900/80 border border-slate-700 rounded-xl px-4 py-3 pr-10 text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 cursor-pointer font-medium text-sm"
+                >
+                  <option value="nid">🔢 NID</option>
+                  <option value="dob">📅 DOB</option>
+                  <option value="name">👤 Name</option>
+                </select>
+                <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 pointer-events-none" />
               </div>
-              <input
-                type="text"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder={placeholders[searchType]}
-                className="block w-full pl-10 pr-4 py-3 bg-slate-900/50 border border-slate-700 rounded-xl text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition-all"
-              />
+
+              <div className="relative flex-1 min-w-[200px]">
+                <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
+                  <SearchIcon className="h-5 w-5 text-slate-500" />
+                </div>
+                <input
+                  type="text"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder={placeholders[searchType]}
+                  className="block w-full pl-10 pr-4 py-3 bg-slate-900/50 border border-slate-700 rounded-xl text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition-all font-mono"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="px-8 py-3 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white font-semibold rounded-xl transition-all shadow-lg shadow-indigo-500/20 disabled:opacity-50 flex items-center gap-2"
+              >
+                {loading ? "Searching..." : "Search"}
+              </button>
             </div>
-            <button
-              type="submit"
-              disabled={loading}
-              className="px-8 py-3 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white font-semibold rounded-xl transition-all shadow-lg shadow-indigo-500/20 disabled:opacity-50 flex items-center gap-2"
-            >
-              {loading ? "Searching..." : "Search"}
-            </button>
+
+            {/* Regex Toggle */}
+            {searchType === "nid" && (
+              <div className="flex items-center gap-3 px-1">
+                <button
+                  type="button"
+                  onClick={() => setUseRegex(!useRegex)}
+                  className={`flex items-center gap-2 text-xs font-semibold transition-colors ${useRegex ? 'text-indigo-400' : 'text-slate-500'}`}
+                >
+                  {useRegex ? <ToggleRight className="w-5 h-5" /> : <ToggleLeft className="w-5 h-5" />}
+                  Use Regular Expression Search
+                </button>
+                <span className="text-[10px] text-slate-600 italic">Enables advanced pattern matching (e.g. ^123.*)</span>
+              </div>
+            )}
           </form>
         </div>
 
@@ -175,9 +212,15 @@ export default function SearchPage() {
           ) : results.length > 0 ? (
             <>
               <div className="flex items-center justify-between px-2">
-                <span className="text-sm font-medium text-slate-400">Found {results.length} result{results.length > 1 ? 's' : ''}</span>
-                <span className="text-xs text-slate-500">Search type: {searchType.toUpperCase()}</span>
+                <span className="text-sm font-medium text-slate-400">
+                  Showing {results.length} of {totalRecords} result{totalRecords > 1 ? 's' : ''}
+                </span>
+                <div className="flex items-center gap-1 text-[10px] text-slate-500">
+                  <div className="w-2 h-2 rounded-full bg-green-500/50"></div>
+                  <span>Search type: {searchType.toUpperCase()} {useRegex && searchType === 'nid' ? '(REGEX)' : ''}</span>
+                </div>
               </div>
+
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {results.map((record) => (
                   <div key={record.id} className="glass-panel p-5 rounded-2xl border border-slate-700/50 bg-slate-800/40 hover:bg-slate-800/60 transition-all group">
@@ -193,14 +236,13 @@ export default function SearchPage() {
                         )}
                         <button
                           onClick={() => setDeleteConfirm(record)}
-                          title="Delete Record"
                           className="p-1.5 rounded-md bg-red-500/10 text-red-400/60 hover:text-red-400 hover:bg-red-500/20 transition-colors opacity-0 group-hover:opacity-100"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
                     </div>
-                    
+
                     <h3 className="text-lg font-bold text-slate-100 mb-1">{record.name}</h3>
                     <div className="space-y-2.5 text-sm">
                       <div className="flex items-center gap-2 text-slate-400">
@@ -214,22 +256,16 @@ export default function SearchPage() {
                       <div className="pt-2 border-t border-slate-700/50 mt-2 space-y-1">
                         <div className="flex items-center gap-2 text-xs text-slate-500">
                           <MapPin className="w-3 h-3" />
-                          <span>{record.division} • {record.district} • {record.upazila}</span>
+                          <span>{record.district} • {record.upazila}</span>
                         </div>
                         <div className="flex items-center gap-2 text-xs text-slate-500">
                           <FileText className="w-3 h-3" />
                           <span className="truncate" title={record.source_file}>{record.source_file}</span>
                         </div>
-                        {record.updated_at && (
-                          <div className="flex items-center gap-2 text-xs text-slate-600">
-                            <Clock className="w-3 h-3" />
-                            <span>Updated: {formatDate(record.updated_at)}</span>
-                          </div>
-                        )}
                       </div>
                     </div>
 
-                    <button 
+                    <button
                       onClick={() => setSelectedRecord(record)}
                       className="w-full mt-4 py-2 px-4 bg-slate-700/50 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-semibold transition-all border border-slate-600/50 flex items-center justify-center gap-2"
                     >
@@ -239,6 +275,51 @@ export default function SearchPage() {
                   </div>
                 ))}
               </div>
+
+              {/* Pagination */}
+              {totalPages > 1 && (
+                <div className="flex justify-center items-center gap-2 pt-6">
+                  <button
+                    onClick={() => handleSearch(undefined, currentPage - 1)}
+                    disabled={currentPage === 1 || loading}
+                    className="p-2 rounded-lg bg-slate-800 border border-slate-700 disabled:opacity-30 hover:bg-slate-700 transition-colors"
+                  >
+                    <ChevronLeft className="w-5 h-5" />
+                  </button>
+
+                  <div className="flex items-center gap-1">
+                    {[...Array(Math.min(5, totalPages))].map((_, i) => {
+                      // Simple sliding window for pagination
+                      let pageNum = i + 1;
+                      if (totalPages > 5 && currentPage > 3) {
+                        pageNum = currentPage - 3 + i + 1;
+                        if (pageNum > totalPages) pageNum = totalPages - (4 - i);
+                      }
+
+                      return (
+                        <button
+                          key={pageNum}
+                          onClick={() => handleSearch(undefined, pageNum)}
+                          className={`w-9 h-9 rounded-lg font-bold text-sm transition-all ${currentPage === pageNum
+                              ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20'
+                              : 'bg-slate-800 text-slate-400 border border-slate-700 hover:bg-slate-700'
+                            }`}
+                        >
+                          {pageNum}
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  <button
+                    onClick={() => handleSearch(undefined, currentPage + 1)}
+                    disabled={currentPage >= totalPages || loading}
+                    className="p-2 rounded-lg bg-slate-800 border border-slate-700 disabled:opacity-30 hover:bg-slate-700 transition-colors"
+                  >
+                    <ChevronRight className="w-5 h-5" />
+                  </button>
+                </div>
+              )}
 
               {/* Detail Modal */}
               {selectedRecord && (
@@ -254,14 +335,14 @@ export default function SearchPage() {
                           <p className="text-xs text-slate-500 mt-0.5">NID: {selectedRecord.nid}</p>
                         </div>
                       </div>
-                      <button 
+                      <button
                         onClick={() => setSelectedRecord(null)}
                         className="p-2 hover:bg-slate-800 rounded-lg transition-colors"
                       >
                         <X className="w-5 h-5" />
                       </button>
                     </div>
-                    
+
                     <div className="p-6 overflow-y-auto custom-scrollbar space-y-6">
                       <div className="grid grid-cols-2 gap-4">
                         <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-800/50">
@@ -277,12 +358,12 @@ export default function SearchPage() {
                       {selectedRecord.data && (
                         <div>
                           <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-                             <Database className="w-4 h-4" />
-                             Full Beneficiary Information
+                            <Database className="w-4 h-4" />
+                            Full Beneficiary Information
                           </h4>
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4">
                             {Object.entries(selectedRecord.data).map(([key, value]) => {
-                              if (['Cleaned_NID', 'Cleaned_DOB', 'Status', 'Message', 'Excel_Row'].includes(key)) return null;
+                              if (['Cleaned_NID', 'Cleaned_DOB', 'Status', 'Message', 'Excel_Row', 'Extracted_Name'].includes(key)) return null;
                               return (
                                 <div key={key} className="border-b border-slate-800 pb-2">
                                   <p className="text-[10px] uppercase text-slate-500 font-bold">{key.replace(/_/g, ' ')}</p>
@@ -295,30 +376,30 @@ export default function SearchPage() {
                       )}
 
                       <div className="pt-4 border-t border-slate-800 space-y-2">
-                         <div className="flex items-center gap-2 text-xs text-slate-500">
-                           <MapPin className="w-3.5 h-3.5" />
-                           <span>Location: {selectedRecord.division} › {selectedRecord.district} › {selectedRecord.upazila}</span>
-                         </div>
-                         <div className="flex items-center gap-2 text-xs text-slate-500">
-                           <FileText className="w-3.5 h-3.5" />
-                           <span>Source: {selectedRecord.source_file}</span>
-                         </div>
-                         <div className="flex items-center gap-2 text-xs text-slate-500">
-                           <Clock className="w-3.5 h-3.5" />
-                           <span>Added: {formatDate(selectedRecord.created_at)} | Updated: {formatDate(selectedRecord.updated_at)}</span>
-                         </div>
+                        <div className="flex items-center gap-2 text-xs text-slate-500">
+                          <MapPin className="w-3.5 h-3.5" />
+                          <span>Location: {selectedRecord.division} › {selectedRecord.district} › {selectedRecord.upazila}</span>
+                        </div>
+                        <div className="flex items-center gap-2 text-xs text-slate-500">
+                          <FileText className="w-3.5 h-3.5" />
+                          <span>Source: {selectedRecord.source_file}</span>
+                        </div>
+                        <div className="flex items-center gap-2 text-xs text-slate-500">
+                          <Clock className="w-3.5 h-3.5" />
+                          <span>Added: {formatDate(selectedRecord.created_at)}</span>
+                        </div>
                       </div>
                     </div>
-                    
+
                     <div className="p-4 bg-slate-900/80 border-t border-slate-800 flex justify-between">
-                      <button 
+                      <button
                         onClick={() => { setDeleteConfirm(selectedRecord); }}
                         className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg font-medium transition-all flex items-center gap-2 text-sm border border-red-500/20"
                       >
                         <Trash2 className="w-4 h-4" />
                         Delete Record
                       </button>
-                      <button 
+                      <button
                         onClick={() => setSelectedRecord(null)}
                         className="px-6 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg font-medium transition-all"
                       >
@@ -348,15 +429,15 @@ export default function SearchPage() {
                       <p className="text-slate-500 text-xs">{deleteConfirm.district} • {deleteConfirm.upazila}</p>
                     </div>
                     <div className="flex justify-end gap-3">
-                      <button 
-                        disabled={deleting} 
-                        onClick={() => setDeleteConfirm(null)} 
+                      <button
+                        disabled={deleting}
+                        onClick={() => setDeleteConfirm(null)}
                         className="px-4 py-2 rounded-lg text-slate-300 hover:bg-slate-800 transition-colors font-medium"
                       >
                         Cancel
                       </button>
-                      <button 
-                        disabled={deleting} 
+                      <button
+                        disabled={deleting}
                         onClick={() => handleDelete(deleteConfirm)}
                         className="px-5 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white font-medium flex items-center gap-2 transition-all disabled:opacity-50"
                       >

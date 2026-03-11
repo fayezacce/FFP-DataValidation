@@ -654,7 +654,7 @@ async def validate_excel(
         # Sanitize NaN values for JSON storage
         row_dict = {k: (None if isinstance(v, float) and pd.isna(v) else v) for k, v in row_dict.items()}
         
-        name_val = row.get('Name', row.get('name', 'Unknown'))
+        name_val = row.get('Extracted_Name', 'Unknown')
         if pd.isna(name_val): name_val = 'Unknown'
         dob_val = row.get('Cleaned_DOB', '')
         if pd.isna(dob_val): dob_val = ''
@@ -725,7 +725,7 @@ async def validate_excel(
         row_dict = row.to_dict()
         row_dict = {k: (None if isinstance(v, float) and pd.isna(v) else v) for k, v in row_dict.items()}
         
-        name_val = row.get('Name', row.get('name', 'Unknown'))
+        name_val = row.get('Extracted_Name', 'Unknown')
         if pd.isna(name_val): name_val = 'Unknown'
         dob_val = row.get('Cleaned_DOB', '')
         if pd.isna(dob_val): dob_val = ''
@@ -1587,30 +1587,40 @@ async def search_records(
     type: str = "nid", 
     page: int = 1,
     limit: int = 50,
+    regex: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Search for valid records by NID, DOB, or Name with pagination."""
+    """Search for valid records by NID, DOB, or Name with pagination and regex support."""
     query = query.strip()
     if not query:
-        return []
+        return {"results": [], "total": 0, "page": page, "limit": limit}
     
-    # Cap limit for safety in 100+ concurrent requests
     limit = min(limit, 200)
     offset = (page - 1) * limit
     
+    base_query = db.query(ValidRecord)
+    
     if type == "dob":
-        results = db.query(ValidRecord).filter(ValidRecord.dob == query).offset(offset).limit(limit).all()
+        data_query = base_query.filter(ValidRecord.dob == query)
     elif type == "name":
-        # Using ilike works great with GiST/B-tree pg_trgm index
-        results = db.query(ValidRecord).filter(
-            ValidRecord.name.ilike(f"%{query}%")
-        ).offset(offset).limit(limit).all()
+        data_query = base_query.filter(ValidRecord.name.ilike(f"%{query}%"))
     else:  # default: nid
-        results = db.query(ValidRecord).filter(
-            ValidRecord.nid.contains(query)
-        ).offset(offset).limit(limit).all()
-    return results
+        if regex:
+            # PostgreSQL case-insensitive regex operator
+            data_query = base_query.filter(ValidRecord.nid.op("~*")(query))
+        else:
+            data_query = base_query.filter(ValidRecord.nid.contains(query))
+            
+    total = data_query.count()
+    results = data_query.offset(offset).limit(limit).all()
+    
+    return {
+        "results": results,
+        "total": total,
+        "page": page,
+        "limit": limit
+    }
 
 @app.get("/nid/{nid}", dependencies=[Depends(PermissionChecker("view_stats"))])
 async def check_nid(

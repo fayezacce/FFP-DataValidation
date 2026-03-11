@@ -196,6 +196,11 @@ def process_dataframe(df: pd.DataFrame, dob_col: str, nid_col: str, header_row: 
         actual_nid_col = resolve_column_name(nid_col, df.columns.tolist())
     
     # Tracking fields (optional)
+    name_col = resolve_column_name("উপকারভোগীর নাম", df.columns.tolist()) or \
+               resolve_column_name("উপকার ভোগীর নাম", df.columns.tolist()) or \
+               resolve_column_name("Beneficiary Name", df.columns.tolist()) or \
+               resolve_column_name("Name", df.columns.tolist())
+    
     card_col = resolve_column_name("কার্ড নং", df.columns.tolist()) or resolve_column_name("Card No", df.columns.tolist())
     serial_col = resolve_column_name("স্মারক নং", df.columns.tolist()) or resolve_column_name("Master Serial", df.columns.tolist()) or resolve_column_name("Serial", df.columns.tolist())
     mobile_col = resolve_column_name("মোবাইল নম্বর", df.columns.tolist()) or resolve_column_name("Mobile", df.columns.tolist()) or resolve_column_name("Mobile Number", df.columns.tolist())
@@ -212,6 +217,7 @@ def process_dataframe(df: pd.DataFrame, dob_col: str, nid_col: str, header_row: 
     cleaned_dobs = [None] * n
     dob_years = [None] * n
     cleaned_nids = [None] * n
+    extracted_names = [None] * n
     card_nos = [None] * n
     master_serials = [None] * n
     mobiles = [None] * n
@@ -224,6 +230,7 @@ def process_dataframe(df: pd.DataFrame, dob_col: str, nid_col: str, header_row: 
     # Use itertuples for ~10x speedup over iterrows
     dob_col_idx = df.columns.get_loc(dob_col)
     nid_col_idx = df.columns.get_loc(nid_col)
+    name_col_idx = df.columns.get_loc(name_col) if name_col else -1
     card_col_idx = df.columns.get_loc(card_col) if card_col else -1
     serial_col_idx = df.columns.get_loc(serial_col) if serial_col else -1
     mobile_col_idx = df.columns.get_loc(mobile_col) if mobile_col else -1
@@ -239,6 +246,13 @@ def process_dataframe(df: pd.DataFrame, dob_col: str, nid_col: str, header_row: 
         cleaned_dobs[i] = cleaned_dob if cleaned_dob else "Invalid Date"
         dob_years[i] = dob_year
         cleaned_nids[i] = final_nid
+        
+        # Extract name if found
+        if name_col_idx != -1:
+            val = tup[name_col_idx + 1]
+            extracted_names[i] = str(val).strip() if not pd.isna(val) else "Unknown"
+        else:
+            extracted_names[i] = "Unknown"
         
         # Extract tracking fields
         if card_col_idx != -1:
@@ -267,6 +281,7 @@ def process_dataframe(df: pd.DataFrame, dob_col: str, nid_col: str, header_row: 
     
     results['Cleaned_DOB'] = cleaned_dobs
     results['Cleaned_NID'] = cleaned_nids
+    results['Extracted_Name'] = extracted_names
     results['Card_No'] = card_nos
     results['Master_Serial'] = master_serials
     results['Mobile'] = mobiles
