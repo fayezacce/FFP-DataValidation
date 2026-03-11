@@ -129,3 +129,6 @@ volumes:
 networks:
   app_network:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.72.0/24
