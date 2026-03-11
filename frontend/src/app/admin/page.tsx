@@ -124,6 +124,7 @@ export default function AdminPage() {
   const [isPassModalOpen, setIsPassModalOpen] = useState(false);
   const [editApiRateLimit, setEditApiRateLimit] = useState<number>(60);
   const [editApiTotalLimit, setEditApiTotalLimit] = useState<string>("");
+  const [editApiIpWhitelist, setEditApiIpWhitelist] = useState<string>("");
 
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
@@ -397,6 +398,7 @@ export default function AdminPage() {
       // API limits
       updateData.api_rate_limit = editApiRateLimit;
       updateData.api_total_limit = editApiTotalLimit === "" ? null : parseInt(editApiTotalLimit);
+      updateData.api_ip_whitelist = editApiIpWhitelist;
 
       const res = await fetchWithAuth(`${getBackendUrl()}/auth/users/${userId}`, {
         method: "PUT",
@@ -424,7 +426,13 @@ export default function AdminPage() {
         method: "POST"
       });
       if (res.ok) {
-        showMsg("API Key generated");
+        const data = await res.json();
+        // The API returns the raw key ONCE during generation on the user object's api_key property
+        if (data.api_key) {
+          prompt("WARNING: This key will only be shown ONCE. Copy it now:", data.api_key);
+        } else {
+          showMsg("API Key generated");
+        }
         loadData();
       } else {
         const d = await res.json();
@@ -603,6 +611,16 @@ export default function AdminPage() {
                                         placeholder="No limit"
                                       />
                                     </div>
+                                    <div className="flex items-center space-x-1">
+                                      <span className="text-[9px] text-gray-500 uppercase w-8">IPs:</span>
+                                      <input
+                                        type="text"
+                                        value={editApiIpWhitelist}
+                                        onChange={(e) => setEditApiIpWhitelist(e.target.value)}
+                                        className="bg-[#1a1a1c] border border-[#2a2a2e] text-[10px] rounded px-1.5 py-0.5 outline-none focus:border-emerald-500 flex-1"
+                                        placeholder="IP Whitelist (comma-sep)"
+                                      />
+                                    </div>
                                   </div>
                                 </>
                               ) : (
@@ -615,6 +633,9 @@ export default function AdminPage() {
                                   )}
                                   {u.api_total_limit !== null && (
                                     <span className="text-[10px] text-gray-500">Total: {u.api_total_limit} max</span>
+                                  )}
+                                  {u.api_ip_whitelist && (
+                                    <span className="text-[10px] text-cyan-500/80" title={u.api_ip_whitelist}>IP Restricted</span>
                                   )}
                                 </>
                               )}
@@ -656,6 +677,7 @@ export default function AdminPage() {
                                   setNewRole(u.role);
                                   setEditApiRateLimit(u.api_rate_limit || "");
                                   setEditApiTotalLimit(u.api_total_limit !== null ? u.api_total_limit.toString() : "");
+                                  setEditApiIpWhitelist(u.api_ip_whitelist || "");
                                 }} className="text-gray-400 hover:text-white transition-colors text-xs font-bold">Edit</button>
                                 <button onClick={() => handleDeleteUser(u.id)} className="text-gray-400 hover:text-red-500 transition-colors text-xs font-bold">Del</button>
                               </div>

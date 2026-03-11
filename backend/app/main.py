@@ -113,9 +113,9 @@ async def lifespan(app: FastAPI):
     yield
 
 def migrate_schema(db: Session):
-    """Safely add any missing columns to summary_stats table."""
+    """Safely add any missing columns to summary_stats and users tables."""
     from sqlalchemy import text
-    new_columns = [
+    new_summary_columns = [
         ("last_upload_total", "INTEGER DEFAULT 0"),
         ("last_upload_valid", "INTEGER DEFAULT 0"),
         ("last_upload_invalid", "INTEGER DEFAULT 0"),
@@ -126,11 +126,47 @@ def migrate_schema(db: Session):
         ("excel_invalid_url", "VARCHAR"),
         ("pdf_invalid_url", "VARCHAR"),
     ]
-    for col_name, col_def in new_columns:
+    for col_name, col_def in new_summary_columns:
         try:
             db.execute(text(
                 f"ALTER TABLE summary_stats ADD COLUMN IF NOT EXISTS {col_name} {col_def}"
             ))
+            db.commit()
+        except Exception:
+            db.rollback()
+
+    new_user_columns = [
+        ("api_key_last_used", "TIMESTAMP"),
+        ("api_rate_limit", "INTEGER DEFAULT 60"),
+        ("api_total_limit", "INTEGER"),
+        ("api_usage_count", "INTEGER DEFAULT 0"),
+        ("api_ip_whitelist", "VARCHAR")
+    ]
+    for col_name, col_def in new_user_columns:
+        try:
+            db.execute(text(
+                f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col_name} {col_def}"
+            ))
+            db.commit()
+        except Exception:
+            db.rollback()
+
+    # New columns for valid_records
+    try:
+        db.execute(text("ALTER TABLE valid_records ADD COLUMN IF NOT EXISTS card_no VARCHAR"))
+        db.commit()
+    except Exception:
+        db.rollback()
+
+    # New columns for invalid_records
+    invalid_cols = [
+        ("card_no", "VARCHAR"),
+        ("master_serial", "VARCHAR"),
+        ("mobile", "VARCHAR")
+    ]
+    for col_name, col_def in invalid_cols:
+        try:
+            db.execute(text(f"ALTER TABLE invalid_records ADD COLUMN IF NOT EXISTS {col_name} {col_def}"))
             db.commit()
         except Exception:
             db.rollback()
@@ -646,6 +682,7 @@ async def validate_excel(
             "division": geo["division"],
             "district": geo["district"],
             "upazila": geo["upazila"],
+            "card_no": row.get('Card_No', ''),
             "source_file": file.filename,
             "batch_id": batch.id,
             "upload_batch": current_version,
@@ -666,6 +703,7 @@ async def validate_excel(
                     'division': stmt.excluded.division,
                     'district': stmt.excluded.district,
                     'upazila': stmt.excluded.upazila,
+                    'card_no': stmt.excluded.card_no,
                     'source_file': stmt.excluded.source_file,
                     'batch_id': stmt.excluded.batch_id,
                     'upload_batch': stmt.excluded.upload_batch,
@@ -699,6 +737,9 @@ async def validate_excel(
             "division": geo["division"],
             "district": geo["district"],
             "upazila": geo["upazila"],
+            "card_no": row.get('Card_No', ''),
+            "master_serial": row.get('Master_Serial', ''),
+            "mobile": row.get('Mobile', ''),
             "source_file": file.filename,
             "batch_id": batch.id,
             "upload_batch": current_version,
@@ -712,26 +753,54 @@ async def validate_excel(
             db.bulk_insert_mappings(InvalidRecord, chunk)
     # --- End InvalidRecord inserting ---
     
+    # --- Iterative Correction Logic: Clear old errors ---
+    if is_correction:
+        # Multi-layered matching to delete corrected records from InvalidRecord
+        # 1. NID matches
+        # 2. Card No matches
+        # 3. Master Serial matches
+        # 4. Mobile matches
+        
+        valid_nids = [str(r['nid']) for r in insert_data if r.get('nid')]
+        valid_cards = [str(r['card_no']) for r in insert_data if r.get('card_no')]
+        
+        if valid_nids or valid_cards:
+            from sqlalchemy import or_
+            db.query(InvalidRecord).filter(
+                InvalidRecord.upazila == geo["upazila"],
+                InvalidRecord.district == geo["district"],
+                or_(
+                    InvalidRecord.nid.in_(valid_nids),
+                    InvalidRecord.card_no.in_(valid_cards)
+                )
+            ).delete(synchronize_session=False)
+            db.commit()
+    # --- End Iterative Correction Logic ---
+    
     # Update batch with results
     batch.new_records = new_count
 
     batch.updated_records = updated_count
     db.commit()
 
-    # 2. Accumulate SummaryStats (only unique valid NIDs count)
-    new_unique_valid = new_count  # Only genuinely new NIDs
+    # 2. Re-calculate SummaryStats from scratch (absolute truth)
+    total_valid = db.query(ValidRecord).filter(
+        ValidRecord.upazila == geo["upazila"],
+        ValidRecord.district == geo["district"]
+    ).count()
     
-    if summary:
-        if is_correction:
-            # If correction, decrement invalid AND increment valid by number of FIXED records
-            summary.invalid = max(0, summary.invalid - new_unique_valid)
-            summary.valid += new_unique_valid
-            # Total remains the same (beneficiary population is fixed)
-        else:
-            summary.valid += new_unique_valid  # Accumulate unique valid
-            summary.invalid += error_count
-            summary.total = summary.valid + summary.invalid
+    total_invalid = db.query(InvalidRecord).filter(
+        InvalidRecord.upazila == geo["upazila"],
+        InvalidRecord.district == geo["district"]
+    ).count()
 
+    if summary:
+        summary.valid = total_valid
+        summary.invalid = total_invalid
+        # total represents the total "slots" or beneficiaries we are tracking
+        # This is essentially valid + invalid (errors are still meant to be valid records)
+        summary.total = total_valid + total_invalid
+        
         summary.last_upload_total = stats['total_rows']
         summary.last_upload_valid = valid_count
         summary.last_upload_invalid = error_count
@@ -750,9 +819,9 @@ async def validate_excel(
             division=geo["division"],
             district=geo["district"],
             upazila=geo["upazila"],
-            total=new_unique_valid + error_count,
-            valid=new_unique_valid,
-            invalid=error_count,
+            total=total_valid + total_invalid,
+            valid=total_valid,
+            invalid=total_invalid,
             last_upload_total=stats['total_rows'],
             last_upload_valid=valid_count,
             last_upload_invalid=error_count,

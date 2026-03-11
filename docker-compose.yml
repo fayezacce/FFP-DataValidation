@@ -20,8 +20,8 @@ services:
     # Port 8000 NOT exposed externally - only reachable inside docker network via nginx
     environment:
       - MAX_UPLOAD_SIZE=20971520 # 20MB
-      - DATABASE_URL=postgresql://fayez:fayez_secret@db:5432/ffp_validator
-      - JWT_SECRET=supersecretkeyforffpdatavalidator2024
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-fayez}:${POSTGRES_PASSWORD:-fayez_secret}@db:5432/ffp_validator
+      - JWT_SECRET=${JWT_SECRET:-supersecretkeyforffpdatavalidator2024_paddedoutto64characterslong}
       - WATCHFILES_FORCE_POLLING=true
     volumes:
       - ./backend:/app
@@ -82,7 +82,6 @@ services:
     networks:
       - app_network
 
- 
 networks:
   app_network:
     driver: bridge

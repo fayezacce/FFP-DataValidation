@@ -110,6 +110,16 @@ async def get_api_key(request: Request, api_key: str = Security(api_key_header),
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="API quota exceeded"
             )
+            
+        # Check IP whitelist
+        if user.api_ip_whitelist:
+            client_ip = get_real_ip(request)
+            allowed_ips = [ip.strip() for ip in user.api_ip_whitelist.split(",") if ip.strip()]
+            if client_ip not in allowed_ips:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="IP address not whitelisted"
+                )
         
         # Update usage stats
         user.api_usage_count += 1

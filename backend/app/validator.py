@@ -189,9 +189,18 @@ def process_dataframe(df: pd.DataFrame, dob_col: str, nid_col: str, header_row: 
     
     # Resolve columns using fuzzy logic
     actual_dob_col = resolve_column_name(dob_col, df.columns.tolist())
-    actual_nid_col = resolve_column_name(nid_col, df.columns.tolist())
     
-    # Ensure columns exist
+    # Prioritize specific Bengali NID column name
+    actual_nid_col = resolve_column_name("জাতীয় পরিচয় পত্র নম্বর", df.columns.tolist())
+    if not actual_nid_col:
+        actual_nid_col = resolve_column_name(nid_col, df.columns.tolist())
+    
+    # Tracking fields (optional)
+    card_col = resolve_column_name("কার্ড নং", df.columns.tolist()) or resolve_column_name("Card No", df.columns.tolist())
+    serial_col = resolve_column_name("স্মারক নং", df.columns.tolist()) or resolve_column_name("Master Serial", df.columns.tolist()) or resolve_column_name("Serial", df.columns.tolist())
+    mobile_col = resolve_column_name("মোবাইল নম্বর", df.columns.tolist()) or resolve_column_name("Mobile", df.columns.tolist()) or resolve_column_name("Mobile Number", df.columns.tolist())
+    
+    # Ensure mandatory columns exist
     if not actual_dob_col or not actual_nid_col:
         available = ", ".join([str(c) for c in df.columns[:20]])
         raise ValueError(f"Column mismatch. Expected DOB: '{dob_col}', NID: '{nid_col}'. Available in file: {available}")
@@ -203,6 +212,9 @@ def process_dataframe(df: pd.DataFrame, dob_col: str, nid_col: str, header_row: 
     cleaned_dobs = [None] * n
     dob_years = [None] * n
     cleaned_nids = [None] * n
+    card_nos = [None] * n
+    master_serials = [None] * n
+    mobiles = [None] * n
     statuses = [None] * n
     messages = [None] * n
     excel_rows = [None] * n
@@ -212,6 +224,9 @@ def process_dataframe(df: pd.DataFrame, dob_col: str, nid_col: str, header_row: 
     # Use itertuples for ~10x speedup over iterrows
     dob_col_idx = df.columns.get_loc(dob_col)
     nid_col_idx = df.columns.get_loc(nid_col)
+    card_col_idx = df.columns.get_loc(card_col) if card_col else -1
+    serial_col_idx = df.columns.get_loc(serial_col) if serial_col else -1
+    mobile_col_idx = df.columns.get_loc(mobile_col) if mobile_col else -1
     
     for i, tup in enumerate(df.itertuples(index=True)):
         idx = tup[0]  # original df index
@@ -224,6 +239,18 @@ def process_dataframe(df: pd.DataFrame, dob_col: str, nid_col: str, header_row: 
         cleaned_dobs[i] = cleaned_dob if cleaned_dob else "Invalid Date"
         dob_years[i] = dob_year
         cleaned_nids[i] = final_nid
+        
+        # Extract tracking fields
+        if card_col_idx != -1:
+            val = tup[card_col_idx + 1]
+            card_nos[i] = normalize_digits(str(val)).replace(".0", "").strip() if not pd.isna(val) else ""
+        if serial_col_idx != -1:
+            val = tup[serial_col_idx + 1]
+            master_serials[i] = normalize_digits(str(val)).replace(".0", "").strip() if not pd.isna(val) else ""
+        if mobile_col_idx != -1:
+            val = tup[mobile_col_idx + 1]
+            mobiles[i] = normalize_digits(str(val)).replace(".0", "").strip() if not pd.isna(val) else ""
+
         statuses[i] = status
         messages[i] = message
         excel_rows[i] = idx + header_row + 1
@@ -240,6 +267,9 @@ def process_dataframe(df: pd.DataFrame, dob_col: str, nid_col: str, header_row: 
     
     results['Cleaned_DOB'] = cleaned_dobs
     results['Cleaned_NID'] = cleaned_nids
+    results['Card_No'] = card_nos
+    results['Master_Serial'] = master_serials
+    results['Mobile'] = mobiles
     results['Status'] = statuses
     results['Message'] = messages
     results['Excel_Row'] = excel_rows

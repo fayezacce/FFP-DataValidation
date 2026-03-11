@@ -43,6 +43,7 @@ class UserOut(BaseModel):
     api_rate_limit: int = 60
     api_total_limit: Optional[int] = None
     api_usage_count: int = 0
+    api_ip_whitelist: Optional[str] = None
     
     class Config:
         from_attributes = True
@@ -113,6 +114,7 @@ class UpdateUser(BaseModel):
     role: Optional[str] = None
     api_rate_limit: Optional[int] = None
     api_total_limit: Optional[int] = None
+    api_ip_whitelist: Optional[str] = None
 
 @router.put("/users/{user_id}", response_model=UserOut, dependencies=[Depends(PermissionChecker("manage_users"))])
 async def update_user(
@@ -147,6 +149,10 @@ async def update_user(
     if user_update.api_total_limit is not None:
         user.api_total_limit = user_update.api_total_limit
         new_data["api_total_limit"] = user_update.api_total_limit
+        
+    if user_update.api_ip_whitelist is not None:
+        user.api_ip_whitelist = user_update.api_ip_whitelist
+        new_data["api_ip_whitelist"] = user_update.api_ip_whitelist
         
     db.commit()
     db.refresh(user)

@@ -15,6 +15,7 @@ class User(Base):
     api_rate_limit = Column(Integer, default=60) # Requests per minute
     api_total_limit = Column(Integer, nullable=True) # Overall request limit
     api_usage_count = Column(Integer, default=0)
+    api_ip_whitelist = Column(String, nullable=True) # Comma-separated IPs
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class SystemConfig(Base):
@@ -132,6 +133,7 @@ class ValidRecord(Base):
     source_file = Column(String)
     batch_id = Column(Integer, index=True) # Linked to upload_batches.id
     upload_batch = Column(Integer, default=1)  # Keeping this for legacy compatibility (as version)
+    card_no = Column(String, index=True) # Unique card number for upazila
     data = Column(JSON)  # Stores all original Excel fields
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -160,6 +162,9 @@ class InvalidRecord(Base):
     source_file = Column(String)
     batch_id = Column(Integer, index=True) # Linked to upload_batches.id
     upload_batch = Column(Integer, default=1)
+    master_serial = Column(String, index=True) # Original ID from the excel file for tracking
+    card_no = Column(String, index=True) # Unique card number for upazila
+    mobile = Column(String, index=True) # Secondary identifier
     error_message = Column(String)  # The validation failure reason
     data = Column(JSON)  # Stores all original Excel fields
     created_at = Column(DateTime, default=datetime.utcnow)

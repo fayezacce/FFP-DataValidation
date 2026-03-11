@@ -1,0 +1,14 @@
+backend/app/__pycache__/
+backend/tests/
+node_modules/
+.next/
+out/
+build/
+db_data/
+db_backups/
+downloads/
+uploads/
+*.tar.gz
+*.xlsx
+.git/
+.vscode/
