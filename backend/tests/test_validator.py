@@ -22,11 +22,11 @@ def test_clean_dob_formats():
 
 def test_validate_nid_cases():
     # Success cases
-    assert validate_nid("1234567890", "1990")[1] == "success"
-    assert validate_nid("19901234567890123", "1990")[1] == "success"
+    assert validate_nid("2738495061", "1990")[1] == "success"
+    assert validate_nid("19902738495061726", "1990")[1] == "success"
     
     # Conversion case
-    nid13 = "1234567890123"
+    nid13 = "2738495061726"
     res_nid, status, msg = validate_nid(nid13, "1985")
     assert status == "warning"
     assert res_nid == "1985" + nid13
@@ -39,7 +39,7 @@ def test_validate_nid_cases():
 def test_process_dataframe_complex():
     df = pd.DataFrame({
         "DOB": ["1990-01-01", "1985-05-05", "invalid"],
-        "NID": ["1234567890", "1234567890123", "0987654321"]
+        "NID": ["2738495061", "2738495061726", "9870654321"]
     })
     
     res, stats = process_dataframe(df, "DOB", "NID")
