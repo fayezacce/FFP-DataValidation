@@ -1,6 +1,6 @@
 # FFP Data Validation Platform
 
-A government-grade data validation system for the **Fortified Food Program (FFP)** under the Ministry of Food, Bangladesh. Validates NID (National ID), Date of Birth, and beneficiary records at upazila/district level.
+A government-grade data validation system for the **Food Friendly Program (FFP)** under the Ministry of Food, Bangladesh. Validates NID (National ID), Date of Birth, and beneficiary records at upazila/district level.
 
 ## Architecture
 
