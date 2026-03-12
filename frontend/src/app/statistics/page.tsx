@@ -46,14 +46,6 @@ interface StatsEntry {
 
   excel_invalid_url?: string;
 
-  master_counts: {
-
-    divisions: Record<string, number>;
-
-    districts: Record<string, number>;
-
-  };
-
 }
 
 
@@ -124,6 +116,7 @@ export default function StatisticsPage() {
 
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [showInvalidOnly, setShowInvalidOnly] = useState(false);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(searchTerm), 300);
@@ -486,15 +479,14 @@ export default function StatisticsPage() {
 
   // Filter and sort entries
 
-  const filteredEntries = (data?.entries || []).filter(e =>
-
-    e.district.toLowerCase().includes(searchTerm.toLowerCase()) ||
-
-    e.upazila.toLowerCase().includes(searchTerm.toLowerCase()) ||
-
-    e.division.toLowerCase().includes(searchTerm.toLowerCase())
-
-  ).sort((a, b) => {
+  const filteredEntries = (data?.entries || []).filter(e => {
+    const matchesSearch =
+      e.district.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      e.upazila.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      e.division.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesInvalid = !showInvalidOnly || e.invalid > 0;
+    return matchesSearch && matchesInvalid;
+  }).sort((a, b) => {
 
     let result = 0;
 
@@ -675,6 +667,17 @@ export default function StatisticsPage() {
 
             </div>
 
+            <button
+              onClick={() => setShowInvalidOnly(prev => !prev)}
+              className={`px-4 py-2 rounded-lg font-medium flex items-center gap-2 transition-all text-sm border ${
+                showInvalidOnly
+                  ? 'bg-red-600/30 border-red-500/50 text-red-300'
+                  : 'bg-slate-800/50 border-slate-700/50 text-slate-400 hover:bg-slate-700/50'
+              }`}
+            >
+              <FileWarning className="w-4 h-4" />
+              {showInvalidOnly ? 'Showing Invalid Only' : 'Show Invalid Only'}
+            </button>
 
 
             <div className="h-8 w-px bg-slate-700/50 mx-1" />
