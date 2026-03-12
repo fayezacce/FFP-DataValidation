@@ -191,15 +191,20 @@ def process_dataframe(df: pd.DataFrame, dob_col: str, nid_col: str, header_row: 
     if not actual_nid_col:
         actual_nid_col = resolve_column_name(nid_col, df.columns.tolist())
     
-    # Tracking fields (optional)
+    # Tracking fields (optional) — try multiple Bengali header variants
     name_col = resolve_column_name("উপকারভোগীর নাম", df.columns.tolist()) or \
+               resolve_column_name("উপকার ভোগীর নাম (বাংলা) (NID সাথে মিল থাকতে হবে)", df.columns.tolist()) or \
                resolve_column_name("উপকার ভোগীর নাম", df.columns.tolist()) or \
                resolve_column_name("Beneficiary Name", df.columns.tolist()) or \
                resolve_column_name("Name", df.columns.tolist())
     
     card_col = resolve_column_name("কার্ড নং", df.columns.tolist()) or resolve_column_name("Card No", df.columns.tolist())
     serial_col = resolve_column_name("স্মারক নং", df.columns.tolist()) or resolve_column_name("Master Serial", df.columns.tolist()) or resolve_column_name("Serial", df.columns.tolist())
-    mobile_col = resolve_column_name("মোবাইল নম্বর", df.columns.tolist()) or resolve_column_name("Mobile", df.columns.tolist()) or resolve_column_name("Mobile Number", df.columns.tolist())
+    mobile_col = resolve_column_name("মোবাইল নং (নিজ নামে)", df.columns.tolist()) or \
+                 resolve_column_name("মোবাইল নং", df.columns.tolist()) or \
+                 resolve_column_name("মোবাইল নম্বর", df.columns.tolist()) or \
+                 resolve_column_name("Mobile", df.columns.tolist()) or \
+                 resolve_column_name("Mobile Number", df.columns.tolist())
     
     # Ensure mandatory columns exist
     if not actual_dob_col or not actual_nid_col:

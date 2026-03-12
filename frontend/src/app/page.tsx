@@ -62,6 +62,8 @@ export default function Home() {
   } | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewRows, setPreviewRows] = useState<any[] | null>(null);
+  const [previewBlocked, setPreviewBlocked] = useState(false);
+  const [previewInvalidPct, setPreviewInvalidPct] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   const mapColumnsRef = useRef<HTMLDivElement>(null);
@@ -263,6 +265,8 @@ export default function Home() {
 
     setPreviewLoading(true);
     setPreviewRows(null);
+    setPreviewBlocked(false);
+    setPreviewInvalidPct(0);
     setError(null);
 
     const formData = new FormData();
@@ -285,6 +289,8 @@ export default function Home() {
 
       const data = await res.json();
       setPreviewRows(data.preview);
+      setPreviewBlocked(data.blocked || false);
+      setPreviewInvalidPct(data.invalid_pct || 0);
     } catch (err: any) {
       setError(err.message || "Preview failed.");
     } finally {
@@ -593,33 +599,51 @@ export default function Home() {
                 <div className="flex items-center gap-3">
                   <AlertCircle className="w-6 h-6 text-yellow-500" />
                   <div>
-                    <h2 className="text-xl font-semibold text-yellow-500">Validation Check</h2>
-                    <p className="text-sm text-slate-400">Verifying columns and date formats for the first few rows...</p>
+                    <h2 className="text-xl font-semibold text-yellow-500">Validation Check (First 10 Rows)</h2>
+                    <p className="text-sm text-slate-400">Verifying columns and date formats for the first 10 rows...</p>
                   </div>
                 </div>
 
+                {/* 50% THRESHOLD BLOCKING BANNER */}
+                {previewBlocked && (
+                  <div className="p-4 rounded-xl bg-red-500/15 border-2 border-red-500/50 flex items-start gap-4">
+                    <div className="p-2 bg-red-500/30 rounded-lg shrink-0">
+                      <AlertCircle className="w-6 h-6 text-red-400" />
+                    </div>
+                    <div>
+                      <p className="font-bold text-red-400 text-lg">Upload Blocked — {previewInvalidPct}% Invalid</p>
+                      <p className="text-sm text-slate-300 mt-1">More than 50% of the first 10 rows are invalid. This usually means the <strong className="text-white">column mapping is wrong</strong>.</p>
+                      <ul className="text-xs text-slate-400 mt-2 space-y-1 list-disc list-inside marker:text-red-500/50">
+                        <li>Double-check the <strong className="text-slate-200">Date of Birth</strong> and <strong className="text-slate-200">NID</strong> column selection</li>
+                        <li>Verify the <strong className="text-slate-200">Header Row</strong> number is correct</li>
+                        <li>Make sure there are no merged cells in the data area</li>
+                      </ul>
+                    </div>
+                  </div>
+                )}
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {previewRows.some(r => r.Status === 'error') ? (
+                  {previewRows.some(r => r.Status === 'error') && !previewBlocked ? (
                     <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/30 flex items-start gap-4">
                       <div className="p-2 bg-red-500/20 rounded-lg shrink-0">
                         <FileWarning className="w-5 h-5 text-red-400" />
                       </div>
                       <div>
-                        <p className="font-semibold text-red-400">Errors Detected</p>
-                        <p className="text-xs text-slate-400 mt-1">Some rows have invalid data. Please check your column mapping or date formats before proceeding.</p>
+                        <p className="font-semibold text-red-400">Some Errors Detected ({previewInvalidPct}%)</p>
+                        <p className="text-xs text-slate-400 mt-1">Some rows have invalid data, but within acceptable range. You can still proceed with validation.</p>
                       </div>
                     </div>
-                  ) : (
+                  ) : !previewBlocked ? (
                     <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-start gap-4">
                       <div className="p-2 bg-emerald-500/20 rounded-lg shrink-0">
                         <CheckCircle2 className="w-5 h-5 text-emerald-400" />
                       </div>
                       <div>
                         <p className="font-semibold text-emerald-400">Columns Look Good</p>
-                        <p className="text-xs text-slate-400 mt-1">First few rows were parsed successfully. You can proceed with full validation.</p>
+                        <p className="text-xs text-slate-400 mt-1">First 10 rows were parsed successfully. You can proceed with full validation.</p>
                       </div>
                     </div>
-                  )}
+                  ) : null}
                 </div>
 
                 <div className="overflow-x-auto rounded-xl border border-slate-700/50 bg-slate-900/30">
@@ -664,7 +688,7 @@ export default function Home() {
               )}
               <button
                 onClick={runValidation}
-                disabled={loading || !dobColumn || !nidColumn || previewLoading}
+                disabled={loading || !dobColumn || !nidColumn || previewLoading || previewBlocked}
                 className="bg-indigo-600 hover:bg-indigo-500 text-white px-8 py-3 rounded-xl font-medium flex items-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-indigo-500/20 active:scale-95"
               >
                 {loading ? (
@@ -672,7 +696,7 @@ export default function Home() {
                 ) : (
                   <Play className="w-5 h-5" />
                 )}
-                {loading ? "Processing full file..." : previewLoading ? "Testing columns..." : "Start Full Validation"}
+                {previewBlocked ? "Blocked — Fix Column Mapping" : loading ? "Processing full file..." : previewLoading ? "Testing columns..." : "Start Full Validation"}
               </button>
             </div>
           </div>

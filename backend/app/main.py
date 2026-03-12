@@ -176,10 +176,24 @@ def migrate_schema(db: Session):
         Base.metadata.create_all(bind=engine)
     except Exception:
         pass
+
+    # Migration for upazilas: quota
+    try:
+        db.execute(text("ALTER TABLE upazilas ADD COLUMN IF NOT EXISTS quota INTEGER DEFAULT 0"))
+        db.commit()
+    except Exception:
+        db.rollback()
             
     # Migration for valid_records: batch_id
     try:
         db.execute(text("ALTER TABLE valid_records ADD COLUMN IF NOT EXISTS batch_id INTEGER"))
+        db.commit()
+    except Exception:
+        db.rollback()
+
+    # Migration for invalid_records: batch_id
+    try:
+        db.execute(text("ALTER TABLE invalid_records ADD COLUMN IF NOT EXISTS batch_id INTEGER"))
         db.commit()
     except Exception:
         db.rollback()
@@ -463,6 +477,8 @@ async def validate_excel(
         processed_df, stats = await asyncio.to_thread(read_and_process)
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
+    except KeyError as ke:
+        raise HTTPException(status_code=400, detail=f"Column not found in the uploaded file: {str(ke)}. Please verify your column selection.")
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -516,7 +532,7 @@ async def validate_excel(
             processed_df.at[idx, dob_column] = processed_df.at[idx, 'Cleaned_DOB']
             processed_df.at[idx, nid_column] = processed_df.at[idx, 'Cleaned_NID']
             
-        cols_to_drop = ['Cleaned_DOB', 'Cleaned_NID', 'Status', 'Message', 'Excel_Row']
+        cols_to_drop = ['Cleaned_DOB', 'Cleaned_NID', 'DOB_Year', 'Status', 'Message', 'Excel_Row', 'Extracted_Name', 'Card_No', 'Master_Serial', 'Mobile']
         export_df = processed_df.drop(columns=[c for c in cols_to_drop if c in processed_df.columns])
         export_df.to_excel(excel_path, index=False, engine='openpyxl')
         
@@ -607,7 +623,7 @@ async def validate_excel(
         export_df[dob_column] = export_df['Cleaned_DOB']
         export_df[nid_column] = export_df['Cleaned_NID']
         
-        cols_to_drop = ['Cleaned_DOB', 'Cleaned_NID', 'DOB_Year', 'Status', 'Message', 'Excel_Row']
+        cols_to_drop = ['Cleaned_DOB', 'Cleaned_NID', 'DOB_Year', 'Status', 'Message', 'Excel_Row', 'Extracted_Name', 'Card_No', 'Master_Serial', 'Mobile']
         export_df = export_df.drop(columns=[c for c in cols_to_drop if c in export_df.columns])
         
         valid_mask = processed_df['Status'] != 'error'
@@ -790,23 +806,33 @@ async def validate_excel(
     # --- Iterative Correction Logic: Clear old errors ---
     if is_correction:
         # Multi-layered matching to delete corrected records from InvalidRecord
-        # 1. NID matches
-        # 2. Card No matches
-        # 3. Master Serial matches
-        # 4. Mobile matches
+        # Match by NID, Card No, Name, or Mobile — any identifier match counts
         
         valid_nids = [str(r['nid']) for r in insert_data if r.get('nid')]
         valid_cards = [str(r['card_no']) for r in insert_data if r.get('card_no')]
+        valid_names = [str(r['name']) for r in insert_data if r.get('name') and r['name'] != 'Unknown']
+        valid_mobiles = []
+        for r in insert_data:
+            mob = r.get('data', {}).get('Mobile', '') if isinstance(r.get('data'), dict) else ''
+            if mob and str(mob).strip():
+                valid_mobiles.append(str(mob).strip())
         
-        if valid_nids or valid_cards:
-            from sqlalchemy import or_
+        match_conditions = []
+        from sqlalchemy import or_
+        if valid_nids:
+            match_conditions.append(InvalidRecord.nid.in_(valid_nids))
+        if valid_cards:
+            match_conditions.append(InvalidRecord.card_no.in_(valid_cards))
+        if valid_names:
+            match_conditions.append(InvalidRecord.name.in_(valid_names))
+        if valid_mobiles:
+            match_conditions.append(InvalidRecord.mobile.in_(valid_mobiles))
+        
+        if match_conditions:
             db.query(InvalidRecord).filter(
                 InvalidRecord.upazila == geo["upazila"],
                 InvalidRecord.district == geo["district"],
-                or_(
-                    InvalidRecord.nid.in_(valid_nids),
-                    InvalidRecord.card_no.in_(valid_cards)
-                )
+                or_(*match_conditions)
             ).delete(synchronize_session=False)
             db.commit()
     # --- End Iterative Correction Logic ---
@@ -920,7 +946,8 @@ async def preview_validation(
     header_row: int = Form(1),
     sheet_name: str = Form(None),
 ):
-    """Dry-run validation of the first 5 rows to catch column mismatches early."""
+    """Dry-run validation of the first 10 rows to catch column mismatches early.
+    Returns blocked=true if >50% of preview rows are invalid."""
     if not file.filename.endswith(('.xlsx', '.xls')):
         raise HTTPException(status_code=400, detail="Only Excel files (.xlsx, .xls) are allowed.")
         
@@ -928,14 +955,26 @@ async def preview_validation(
     try:
         def read_and_process():
             if sheet_name and sheet_name.strip():
-                df = pd.read_excel(io.BytesIO(contents), sheet_name=sheet_name.strip(), header=header_row - 1, nrows=5, dtype=str)
+                df = pd.read_excel(io.BytesIO(contents), sheet_name=sheet_name.strip(), header=header_row - 1, nrows=10, dtype=str)
             else:
-                df = pd.read_excel(io.BytesIO(contents), header=header_row - 1, nrows=5, dtype=str)
+                df = pd.read_excel(io.BytesIO(contents), header=header_row - 1, nrows=10, dtype=str)
             return process_dataframe(df, dob_col=dob_column, nid_col=nid_column, header_row=header_row)
             
         processed_df, stats = await asyncio.to_thread(read_and_process)
         preview_data = processed_df.replace({float('nan'): None}).to_dict(orient="records")
-        return {"preview": preview_data, "summary": stats}
+        
+        # Calculate invalid percentage and blocking threshold
+        total = len(preview_data)
+        invalid = sum(1 for r in preview_data if r.get('Status') == 'error')
+        invalid_pct = round((invalid / total) * 100, 1) if total > 0 else 0
+        blocked = invalid_pct > 50
+        
+        return {
+            "preview": preview_data, 
+            "summary": stats,
+            "invalid_pct": invalid_pct,
+            "blocked": blocked
+        }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -1450,15 +1489,21 @@ async def download_file(filename: str, request: Request):
 @app.get("/statistics", dependencies=[Depends(PermissionChecker("view_stats"))])
 async def get_statistics(
     request: Request,
+    has_invalid: bool = False,
+    division: str = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Return accumulated stats derived from official Upazila table + SummaryStats."""
+    """Return accumulated stats derived from official Upazila table + SummaryStats.
+    
+    Optional query params:
+    - has_invalid: If true, only return upazilas that have invalid > 0
+    - division: Filter by division name
+    """
     import hashlib
 
-    # 1. Fetch ALL active upazilas and join with their summary stats
-    # This ensures that even upazilas with no uploads yet appear in the list with official names.
-    entries_query = db.query(
+    # 1. Fetch active upazilas and join with their summary stats
+    query = db.query(
         Upazila,
         SummaryStats
     ).outerjoin(
@@ -1466,7 +1511,15 @@ async def get_statistics(
         (Upazila.name == SummaryStats.upazila) & (Upazila.district_name == SummaryStats.district)
     ).filter(
         Upazila.is_active == True
-    ).order_by(
+    )
+
+    # Apply server-side filters
+    if division:
+        query = query.filter(Upazila.division_name == division)
+    if has_invalid:
+        query = query.filter(SummaryStats.invalid > 0)
+
+    entries_query = query.order_by(
         Upazila.division_name, Upazila.district_name, Upazila.name
     ).all()
 
@@ -1525,10 +1578,6 @@ async def get_statistics(
                 **e,
                 "created_at": e["created_at"].isoformat() + "Z",
                 "updated_at": e["updated_at"].isoformat() + "Z",
-                "master_counts": {
-                    "divisions": div_counts,
-                    "districts": dist_counts,
-                },
             }
             for e in entries
         ],
