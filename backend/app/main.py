@@ -1487,19 +1487,13 @@ async def download_trailing_zeros_pdf(
     db: Session = Depends(get_db)
 ):
     """Generate and download a PDF of records with 2+ trailing zeros."""
-    invalid_records = db.query(InvalidRecord).filter(
-        InvalidRecord.division == division,
-        InvalidRecord.district == district,
-        InvalidRecord.upazila == upazila
-    ).all()
-    
     valid_records = db.query(ValidRecord).filter(
         ValidRecord.division == division,
         ValidRecord.district == district,
         ValidRecord.upazila == upazila
     ).all()
     
-    records = invalid_records + valid_records
+    records = valid_records
     
     # Sort descending by created_at so we only process the latest "live" attempt for each NID
     records.sort(key=lambda x: getattr(x, 'created_at', datetime.min), reverse=True)
