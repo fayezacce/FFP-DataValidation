@@ -1487,11 +1487,19 @@ async def download_trailing_zeros_pdf(
     db: Session = Depends(get_db)
 ):
     """Generate and download a PDF of records with 2+ trailing zeros."""
-    records = db.query(InvalidRecord).filter(
+    invalid_records = db.query(InvalidRecord).filter(
         InvalidRecord.division == division,
         InvalidRecord.district == district,
         InvalidRecord.upazila == upazila
     ).all()
+    
+    valid_records = db.query(ValidRecord).filter(
+        ValidRecord.division == division,
+        ValidRecord.district == district,
+        ValidRecord.upazila == upazila
+    ).all()
+    
+    records = invalid_records + valid_records
     
     trailing_records = []
     for r in records:
@@ -1505,6 +1513,9 @@ async def download_trailing_zeros_pdf(
     data = []
     for r in trailing_records:
         row_data = r.data if isinstance(r.data, dict) else {}
+        # Identify source table
+        record_status = "valid" if r.__class__.__name__ == "ValidRecord" else "error"
+        
         row = {
             "Cleaned_NID": r.nid,
             "Cleaned_DOB": r.dob,
@@ -1512,7 +1523,7 @@ async def download_trailing_zeros_pdf(
             "Card_No": r.card_no,
             "Master_Serial": r.master_serial,
             "Mobile": r.mobile,
-            "Status": "error",
+            "Status": record_status,
             "Message": "Trailing 2+ zeros",
         }
         for k, v in row_data.items():
