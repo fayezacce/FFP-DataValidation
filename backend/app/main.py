@@ -1502,7 +1502,7 @@ async def download_trailing_zeros_pdf(
     seen_nids = set()
     for r in records:
         nid = str(r.nid or "").strip()
-        if len(nid) >= 10 and nid.endswith("00"):
+        if len(nid) == 17 and nid.endswith("00"):
             if nid not in seen_nids:
                 seen_nids.add(nid)
                 trailing_records.append(r)
