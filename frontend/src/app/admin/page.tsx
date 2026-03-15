@@ -767,7 +767,7 @@ export default function AdminPage() {
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-gray-500 uppercase mb-2">Trailing Zero Auto-Reject Limit</label>
-                  <p className="text-xs text-gray-500 mb-2">Set how many training zeros trigger an automatic invalid flag for 17-digit NIDs (e.g. 6). Set to 0 to disable.</p>
+                  <p className="text-xs text-gray-500 mb-2">Set how many trailing zeros trigger an automatic invalid flag for 17-digit NIDs (e.g. 6). Set to 0 to disable.</p>
                   <input type="number" min="0" value={trailingZeroLimit} onChange={(e) => setTrailingZeroLimit(e.target.value)} placeholder="6" className="w-full px-4 py-3 rounded-xl bg-[#1a1a1c] border border-[#2a2a2e] text-white focus:border-emerald-500 transition-colors" />
                 </div>
                 <button type="submit" disabled={actionLoading} className="w-full py-3 rounded-xl bg-purple-600 hover:bg-purple-500 font-bold disabled:opacity-50">Save Configuration</button>

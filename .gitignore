@@ -87,3 +87,4 @@ Thumbs.db
 *.temp
 .vscode/
 .idea/
+backend_logs*.txt
