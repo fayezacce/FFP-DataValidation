@@ -1520,9 +1520,9 @@ async def download_trailing_zeros_pdf(
             "Cleaned_NID": r.nid,
             "Cleaned_DOB": r.dob,
             "Extracted_Name": r.name,
-            "Card_No": r.card_no,
-            "Master_Serial": r.master_serial,
-            "Mobile": r.mobile,
+            "Card_No": getattr(r, "card_no", ""),
+            "Master_Serial": getattr(r, "master_serial", row_data.get("master_serial", "")),
+            "Mobile": getattr(r, "mobile", row_data.get("mobile", "")),
             "Status": record_status,
             "Message": "Trailing 2+ zeros",
         }
