@@ -1501,11 +1501,17 @@ async def download_trailing_zeros_pdf(
     
     records = invalid_records + valid_records
     
+    # Sort descending by created_at so we only process the latest "live" attempt for each NID
+    records.sort(key=lambda x: getattr(x, 'created_at', datetime.min), reverse=True)
+    
     trailing_records = []
+    seen_nids = set()
     for r in records:
         nid = str(r.nid or "").strip()
         if len(nid) >= 10 and nid.endswith("00"):
-            trailing_records.append(r)
+            if nid not in seen_nids:
+                seen_nids.add(nid)
+                trailing_records.append(r)
             
     if not trailing_records:
         raise HTTPException(status_code=404, detail="No records found with 2+ trailing zeros in this upazila")
