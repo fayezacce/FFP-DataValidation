@@ -1546,6 +1546,9 @@ async def download_trailing_zeros_pdf(
         original_filename=safe_name,
         geo=geo,
         invalid_only=True,
+        custom_title="Food Friendly Program — Trailing Zeros Record Report",
+        issues_label="Records with 2+ Zeros",
+        status_filter="valid"
     )
     
     return FileResponse(path, media_type="application/pdf", filename=f"{safe_name}.pdf")

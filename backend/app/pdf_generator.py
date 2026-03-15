@@ -39,6 +39,9 @@ def generate_pdf_report(
     original_filename: str = "",
     geo: dict = None,
     invalid_only: bool = False,
+    custom_title: str = None,
+    issues_label: str = "Invalid Rows",
+    status_filter: str = "error",
 ) -> str:
     """Generate a PDF validation report.
 
@@ -55,11 +58,12 @@ def generate_pdf_report(
 
     if invalid_only:
         suffix = "_invalid_Report.pdf"
-        title = "Food Friendly Program — Invalid Records Report"
-        df = df[df["Status"] == "error"].copy()
+        title = custom_title or "Food Friendly Program — Invalid Records Report"
+        if status_filter:
+            df = df[df["Status"] == status_filter].copy()
     else:
         suffix = "_validation_Report.pdf"
-        title = "Food Friendly Program Data Validation Report"
+        title = custom_title or "Food Friendly Program Data Validation Report"
 
     filename = (
         f"{original_filename}{suffix}"
@@ -96,7 +100,7 @@ def generate_pdf_report(
     pdf.cell(0, 8, f"Total Rows:     {stats['total_rows']}", new_x="LMARGIN", new_y="NEXT")
 
     if invalid_only:
-        pdf.cell(0, 8, f"Invalid Rows:   {stats['issues']}", new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(0, 8, f"{issues_label}:   {stats['issues']}", new_x="LMARGIN", new_y="NEXT")
     else:
         valid_count = stats["total_rows"] - stats["issues"]
         pdf.cell(0, 8, f"Valid Rows:     {valid_count}", new_x="LMARGIN", new_y="NEXT")
