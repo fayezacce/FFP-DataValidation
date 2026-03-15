@@ -22,7 +22,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from fastapi.requests import Request
 from .database import engine, Base, get_db, SessionLocal
-from .models import User, SystemConfig, RemoteInstance, SummaryStats, ValidRecord, InvalidRecord, UploadedFile, Division, District, Upazila, Permission, RolePermission, AuditLog, ApiUsageLog, UploadBatch
+from .models import User, SystemConfig, RemoteInstance, SummaryStats, ValidRecord, InvalidRecord, UploadedFile, Division, District, Upazila, Permission, RolePermission, AuditLog, ApiUsageLog, UploadBatch, TrailingZeroWhitelist
 from .auth import (
     get_current_user,
     create_access_token,
@@ -467,12 +467,19 @@ async def validate_excel(
         # If fuzzy match failed, use Unknown — don't block the user from validating
 
     try:
+        # Fetch trailing zero configurations
+        tz_limit_conf = db.query(SystemConfig).filter(SystemConfig.key == "trailing_zero_limit").first()
+        tz_limit = int(tz_limit_conf.value) if tz_limit_conf and tz_limit_conf.value.isdigit() else 0
+        
+        tz_whitelist_records = db.query(TrailingZeroWhitelist.nid).all()
+        tz_whitelist = {r[0] for r in tz_whitelist_records}
+
         def read_and_process():
             if sheet_name and sheet_name.strip():
                 df = pd.read_excel(io.BytesIO(contents), sheet_name=sheet_name.strip(), header=header_row - 1, dtype=str)
             else:
                 df = pd.read_excel(io.BytesIO(contents), header=header_row - 1, dtype=str)
-            return process_dataframe(df, dob_col=dob_column, nid_col=nid_column, header_row=header_row)
+            return process_dataframe(df, dob_col=dob_column, nid_col=nid_column, header_row=header_row, tz_limit=tz_limit, tz_whitelist=tz_whitelist)
             
         processed_df, stats = await asyncio.to_thread(read_and_process)
     except ValueError as ve:
@@ -945,6 +952,7 @@ async def preview_validation(
     nid_column: str = Form(...),
     header_row: int = Form(1),
     sheet_name: str = Form(None),
+    db: Session = Depends(get_db)
 ):
     """Dry-run validation of the first 10 rows to catch column mismatches early.
     Returns blocked=true if >50% of preview rows are invalid."""
@@ -953,12 +961,19 @@ async def preview_validation(
         
     contents = await file.read()
     try:
+        # Fetch trailing zero configurations
+        tz_limit_conf = db.query(SystemConfig).filter(SystemConfig.key == "trailing_zero_limit").first()
+        tz_limit = int(tz_limit_conf.value) if tz_limit_conf and tz_limit_conf.value.isdigit() else 0
+        
+        tz_whitelist_records = db.query(TrailingZeroWhitelist.nid).all()
+        tz_whitelist = {r[0] for r in tz_whitelist_records}
+
         def read_and_process():
             if sheet_name and sheet_name.strip():
                 df = pd.read_excel(io.BytesIO(contents), sheet_name=sheet_name.strip(), header=header_row - 1, nrows=10, dtype=str)
             else:
                 df = pd.read_excel(io.BytesIO(contents), header=header_row - 1, nrows=10, dtype=str)
-            return process_dataframe(df, dob_col=dob_column, nid_col=nid_column, header_row=header_row)
+            return process_dataframe(df, dob_col=dob_column, nid_col=nid_column, header_row=header_row, tz_limit=tz_limit, tz_whitelist=tz_whitelist)
             
         processed_df, stats = await asyncio.to_thread(read_and_process)
         preview_data = processed_df.replace({float('nan'): None}).to_dict(orient="records")
