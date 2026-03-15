@@ -1479,7 +1479,7 @@ async def download_all_invalid_zip(db: Session = Depends(get_db)):
         if os.path.exists("downloads/temp_bulk_invalid"):
             shutil.rmtree("downloads/temp_bulk_invalid")
 
-@app.get("/api/upazila/trailing-zeros-pdf", dependencies=[Depends(PermissionChecker("view_stats"))])
+@app.get("/upazila/trailing-zeros-pdf", dependencies=[Depends(PermissionChecker("view_stats"))])
 async def download_trailing_zeros_pdf(
     division: str,
     district: str,
