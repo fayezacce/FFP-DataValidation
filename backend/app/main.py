@@ -1464,6 +1464,66 @@ async def download_all_invalid_zip(db: Session = Depends(get_db)):
         if os.path.exists("downloads/temp_bulk_invalid"):
             shutil.rmtree("downloads/temp_bulk_invalid")
 
+@app.get("/api/upazila/trailing-zeros-pdf", dependencies=[Depends(PermissionChecker("view_stats"))])
+async def download_trailing_zeros_pdf(
+    division: str,
+    district: str,
+    upazila: str,
+    db: Session = Depends(get_db)
+):
+    """Generate and download a PDF of records with 2+ trailing zeros."""
+    records = db.query(InvalidRecord).filter(
+        InvalidRecord.division == division,
+        InvalidRecord.district == district,
+        InvalidRecord.upazila == upazila
+    ).all()
+    
+    trailing_records = []
+    for r in records:
+        nid = str(r.nid or "").strip()
+        if len(nid) >= 10 and nid.endswith("00"):
+            trailing_records.append(r)
+            
+    if not trailing_records:
+        raise HTTPException(status_code=404, detail="No records found with 2+ trailing zeros in this upazila")
+        
+    data = []
+    for r in trailing_records:
+        row_data = r.data if isinstance(r.data, dict) else {}
+        row = {
+            "Cleaned_NID": r.nid,
+            "Cleaned_DOB": r.dob,
+            "Extracted_Name": r.name,
+            "Card_No": r.card_no,
+            "Master_Serial": r.master_serial,
+            "Mobile": r.mobile,
+            "Status": "error",
+            "Message": "Trailing 2+ zeros",
+        }
+        for k, v in row_data.items():
+            if k not in row:
+                row[k] = v
+        data.append(row)
+        
+    df = pd.DataFrame(data)
+    
+    geo = {"division": division, "district": district, "upazila": upazila}
+    stats = {"total_rows": len(df), "issues": len(df), "converted_nid": 0}
+    
+    safe_name = f"{district}_{upazila}".replace(" ", "_").replace("/", "_") + "_trailing_zeros"
+    os.makedirs("downloads/trailing_zeros", exist_ok=True)
+    
+    path = generate_pdf_report(
+        df, stats,
+        additional_columns=[],
+        output_dir="downloads/trailing_zeros",
+        original_filename=safe_name,
+        geo=geo,
+        invalid_only=True,
+    )
+    
+    return FileResponse(path, media_type="application/pdf", filename=f"{safe_name}.pdf")
+
 @app.get("/downloads/{filename}")
 async def download_file(filename: str, request: Request):
     # │ Security: strip any path separators to prevent directory traversal

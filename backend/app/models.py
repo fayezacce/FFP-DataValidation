@@ -221,3 +221,10 @@ class ApiUsageLog(Base):
     ip_address = Column(String)
     latency_ms = Column(Float)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+class TrailingZeroWhitelist(Base):
+    __tablename__ = "trailing_zero_whitelist"
+    id = Column(Integer, primary_key=True, index=True)
+    nid = Column(String, unique=True, index=True, nullable=False)
+    added_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)

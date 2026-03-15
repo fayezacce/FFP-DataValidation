@@ -1212,6 +1212,13 @@ export default function StatisticsPage() {
                                             >
                                               <FileText className="w-3.5 h-3.5" />
                                             </button>
+                                            <button
+                                              onClick={() => downloadFileWithAuth(`/api/upazila/trailing-zeros-pdf?division=${encodeURIComponent(entry.division)}&district=${encodeURIComponent(entry.district)}&upazila=${encodeURIComponent(entry.upazila)}`, `${entry.district}_${entry.upazila}_trailing_zeros.pdf`)}
+                                              title="Download records with 2+ trailing zeros (PDF)"
+                                              className="p-1 rounded-md bg-yellow-500/10 text-yellow-400/80 hover:bg-yellow-500/20 transition-colors border border-yellow-500/20"
+                                            >
+                                              <Hash className="w-3.5 h-3.5" />
+                                            </button>
                                           </>
                                         )}
 

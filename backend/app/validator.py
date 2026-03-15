@@ -57,7 +57,7 @@ def clean_dob(value) -> tuple[str, str]:
 
 _NON_DIGIT = re.compile(r'\D')
 
-def check_fake_nid(nid: str) -> tuple[bool, str]:
+def check_fake_nid(nid: str, tz_limit: int = 0, tz_whitelist: set = None) -> tuple[bool, str]:
     """Detect suspicious NID patterns. Returns (is_suspicious, reason).
     Called AFTER length validation passes (nid is already digits-only)."""
     if not nid or len(nid) < 10:
@@ -72,8 +72,16 @@ def check_fake_nid(nid: str) -> tuple[bool, str]:
         return True, "All-zero NID"
 
     # Trailing double zero (or more) for 17-digit NIDs only
-    if len(nid) == 17 and nid.endswith("00"):
-        return True, "Trailing double-zero NID"
+    if len(nid) == 17:
+        if tz_whitelist and nid in tz_whitelist:
+            pass # Whitelisted, so we ignore trailing zero check
+        else:
+            limit = tz_limit if tz_limit > 0 else 2
+            if nid.endswith("0" * limit):
+                if limit == 2:
+                    return True, "Trailing double-zero NID"
+                else:
+                    return True, f"Trailing {limit}+ zero NID"
 
     # Ascending sequential run of 7+ consecutive digits (e.g. 1234567)
     for i in range(len(nid) - 6):
@@ -90,7 +98,7 @@ def check_fake_nid(nid: str) -> tuple[bool, str]:
     return False, ""
 
 
-def validate_nid(nid_raw, dob_year) -> tuple[str, str, str]:
+def validate_nid(nid_raw, dob_year, tz_limit: int = 0, tz_whitelist: set = None) -> tuple[str, str, str]:
     """Returns (final_nid, status, message)"""
     if pd.isna(nid_raw) or nid_raw is None:
         return "", "error", "Missing NID"
@@ -113,7 +121,7 @@ def validate_nid(nid_raw, dob_year) -> tuple[str, str, str]:
         return nid_str, "error", f"Invalid NID length: {nid_len} digits"
 
     # Fraud pattern check — only on structurally valid NIDs
-    is_fake, fake_reason = check_fake_nid(final_nid)
+    is_fake, fake_reason = check_fake_nid(final_nid, tz_limit, tz_whitelist)
     if is_fake:
         return final_nid, "error", fake_reason
 
@@ -179,7 +187,7 @@ def resolve_column_name(target: str, available_cols: list) -> str:
             
     return None
 
-def process_dataframe(df: pd.DataFrame, dob_col: str, nid_col: str, header_row: int = 1):
+def process_dataframe(df: pd.DataFrame, dob_col: str, nid_col: str, header_row: int = 1, tz_limit: int = 0, tz_whitelist: set = None):
     """Processes DataFrame and adds cleaned cols, status, message, and Excel_Row."""
     results = df.copy()
     
@@ -242,7 +250,7 @@ def process_dataframe(df: pd.DataFrame, dob_col: str, nid_col: str, header_row: 
         nid_raw = tup[nid_col_idx + 1]
         
         cleaned_dob, dob_year = clean_dob(dob_raw)
-        final_nid, status, message = validate_nid(nid_raw, dob_year)
+        final_nid, status, message = validate_nid(nid_raw, dob_year, tz_limit, tz_whitelist)
         
         cleaned_dobs[i] = cleaned_dob if cleaned_dob else "Invalid Date"
         dob_years[i] = dob_year

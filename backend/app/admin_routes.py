@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from .database import get_db
-from .models import User, SystemConfig, RemoteInstance, Upazila
+from .models import User, SystemConfig, RemoteInstance, Upazila, TrailingZeroWhitelist
 from .auth import get_current_user
 from .rbac import PermissionChecker
 from .audit import log_audit
@@ -50,6 +50,51 @@ async def update_config(key: str, update: ConfigUpdate, db: Session = Depends(ge
     log_audit(db, current_user, "UPDATE", "system_configs", config.id, new_data={"key": key, "value": update.value})
     
     return config
+
+# --- Trailing Zero Whitelist ---
+
+class TzWhitelistCreate(BaseModel):
+    nid: str
+
+class TzWhitelistOut(BaseModel):
+    nid: str
+    added_by: Optional[str] = None
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+@router.get("/trailing-zero-whitelist", response_model=List[TzWhitelistOut], dependencies=[Depends(PermissionChecker("view_admin"))])
+async def get_tz_whitelist(db: Session = Depends(get_db)):
+    return db.query(TrailingZeroWhitelist).all()
+
+@router.post("/trailing-zero-whitelist", response_model=TzWhitelistOut, dependencies=[Depends(PermissionChecker("manage_users"))])
+async def add_tz_whitelist(data: TzWhitelistCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    existing = db.query(TrailingZeroWhitelist).filter(TrailingZeroWhitelist.nid == data.nid).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="NID already in whitelist")
+        
+    entry = TrailingZeroWhitelist(nid=data.nid, added_by=current_user.username)
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+    
+    log_audit(db, current_user, "CREATE", "tz_whitelist", 0, new_data={"nid": data.nid})
+    
+    return entry
+
+@router.delete("/trailing-zero-whitelist/{nid}", dependencies=[Depends(PermissionChecker("manage_users"))])
+async def remove_tz_whitelist(nid: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    entry = db.query(TrailingZeroWhitelist).filter(TrailingZeroWhitelist.nid == nid).first()
+    if not entry:
+        raise HTTPException(status_code=404, detail="NID not found in whitelist")
+        
+    db.delete(entry)
+    db.commit()
+    
+    log_audit(db, current_user, "DELETE", "tz_whitelist", 0, old_data={"nid": nid})
+    
+    return {"detail": "Removed"}
 
 # --- Remote Instances ---
 
