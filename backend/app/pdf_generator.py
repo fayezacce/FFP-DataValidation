@@ -22,7 +22,8 @@ class ReportPDF(FPDF):
         if self.print_table_headers and self.show_cols and self.col_widths:
             self.set_font("Nikosh", '', 9)
             for col, width in zip(self.show_cols, self.col_widths):
-                self.cell(width, 10, str(col), border=1, align='C')
+                display_col = "DOB" if col == "Cleaned_DOB" else ("NID" if col == "Cleaned_NID" else str(col))
+                self.cell(width, 10, display_col, border=1, align='C')
             self.ln()
 
     def footer(self):
@@ -139,10 +140,15 @@ def generate_pdf_report(
     pdf.show_cols = show_cols
     pdf.col_widths = col_widths
 
+    def get_display_name(c):
+        if c == "Cleaned_DOB": return "DOB"
+        if c == "Cleaned_NID": return "NID"
+        return str(c)
+
     def print_headers():
         pdf.set_font("Nikosh", "", 9)
         for col, width in zip(show_cols, col_widths):
-            pdf.cell(width, 10, str(col), border=1, align="C")
+            pdf.cell(width, 10, get_display_name(col), border=1, align="C")
         pdf.ln()
 
     print_headers()

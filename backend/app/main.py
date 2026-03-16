@@ -1477,8 +1477,7 @@ async def download_all_invalid_zip(db: Session = Depends(get_db)):
                 pdf_geo   = {"division": entry.division, "district": entry.district, "upazila": entry.upazila}
                 temp_pdf_path = generate_pdf_report(
                     df, pdf_stats,
-                    additional_columns=[c for c in df.columns if c not in
-                                         ["Status","Message","Excel_Row","Cleaned_DOB","Cleaned_NID", "NID", "DOB", "Batch_ID", "Source_File", "Division", "District", "Upazila"]],
+                    additional_columns=[],
                     output_dir="downloads/temp_bulk_invalid",
                     original_filename=f"{dist}_{upz}_invalid",
                     geo=pdf_geo,
