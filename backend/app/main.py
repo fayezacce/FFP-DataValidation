@@ -531,7 +531,7 @@ async def validate_excel(
     nid_col_idx = None
     
     if file.filename.endswith('.xls') and not file.filename.endswith('.xlsx'):
-        # Fallback for strict .xls
+      # Fallback for strict .xls
         processed_df[dob_column] = processed_df[dob_column].astype(object)
         processed_df[nid_column] = processed_df[nid_column].astype(object)
         
@@ -539,7 +539,7 @@ async def validate_excel(
             processed_df.at[idx, dob_column] = processed_df.at[idx, 'Cleaned_DOB']
             processed_df.at[idx, nid_column] = processed_df.at[idx, 'Cleaned_NID']
             
-        cols_to_drop = ['Cleaned_DOB', 'Cleaned_NID', 'DOB_Year', 'Status', 'Message', 'Excel_Row', 'Extracted_Name', 'Card_No', 'Master_Serial', 'Mobile']
+        cols_to_drop = ['Cleaned_DOB', 'Cleaned_NID', 'DOB_Year', 'Status', 'Message', 'Excel_Row', 'Extracted_Name', 'Card_No', 'Master_Serial', 'Mobile', 'Fraud_Reason']
         export_df = processed_df.drop(columns=[c for c in cols_to_drop if c in processed_df.columns])
         export_df.to_excel(excel_path, index=False, engine='openpyxl')
         
@@ -630,7 +630,7 @@ async def validate_excel(
         export_df[dob_column] = export_df['Cleaned_DOB']
         export_df[nid_column] = export_df['Cleaned_NID']
         
-        cols_to_drop = ['Cleaned_DOB', 'Cleaned_NID', 'DOB_Year', 'Status', 'Message', 'Excel_Row', 'Extracted_Name', 'Card_No', 'Master_Serial', 'Mobile']
+        cols_to_drop = ['Cleaned_DOB', 'Cleaned_NID', 'DOB_Year', 'Status', 'Message', 'Excel_Row', 'Extracted_Name', 'Card_No', 'Master_Serial', 'Mobile', 'Fraud_Reason']
         export_df = export_df.drop(columns=[c for c in cols_to_drop if c in export_df.columns])
         
         valid_mask = processed_df['Status'] != 'error'
@@ -1130,14 +1130,12 @@ def _get_live_records_df(db: Session, division: str, district: str, upazila: str
 
 def _save_live_excel_nikosh(df: pd.DataFrame, path: str, sheet_name: str, is_valid: bool = True):
     """Save DataFrame to Excel with Nikosh font and column filtering."""
-    if is_valid:
-        # Columns to remove for valid export as requested
-        exclude = ["Excel_Row", "NID", "Cleaned_NID", "DOB", "Cleaned_DOB", 
-                   "Name", "Status", "Message", "Division", "District", 
-                   "Upazila", "Batch_ID", "Source_File"]
-    else:
-        # Columns to remove for invalid export
-        exclude = ["Cleaned_DOB", "Cleaned_NID", "Status"]
+    exclude = [
+        "Excel_Row", "NID", "Cleaned_NID", "DOB", "Cleaned_DOB", 
+        "Name", "Status", "Message", "Division", "District", 
+        "Upazila", "Batch_ID", "Source_File", "Extracted_Name", 
+        "Card_No", "Master_Serial", "Mobile", "Fraud_Reason"
+    ]
         
     export_df = df.drop(columns=[c for c in exclude if c in df.columns])
     
@@ -1319,7 +1317,14 @@ async def upazila_recheck(
         dl_name = f"{safe_name}_fraud_report.pdf"
     else:
         path = os.path.join("downloads", "recheck", f"{safe_name}_recheck.xlsx")
-        df.to_excel(path, index=False)
+        exclude = [
+            "Excel_Row", "NID", "Cleaned_NID", "DOB", "Cleaned_DOB", 
+            "Name", "Status", "Message", "Division", "District", 
+            "Upazila", "Batch_ID", "Source_File", "Extracted_Name", 
+            "Card_No", "Master_Serial", "Mobile", "Fraud_Reason"
+        ]
+        export_df = df.drop(columns=[c for c in exclude if c in df.columns])
+        export_df.to_excel(path, index=False)
         media   = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         dl_name = f"{safe_name}_fraud_report.xlsx"
 
@@ -1423,6 +1428,7 @@ async def download_all_valid_zip(db: Session = Depends(get_db)):
 
         return FileResponse(zip_path, media_type="application/zip", filename="All_Live_Valid_Records.zip")
     except Exception as e:
+        print(f"ERROR: Valid-zip generation failed: {str(e)}")
         if os.path.exists(zip_path): os.remove(zip_path)
         raise HTTPException(status_code=500, detail=f"Failed to create live valid zip: {str(e)}")
     finally:
@@ -1466,12 +1472,29 @@ async def download_all_invalid_zip(db: Session = Depends(get_db)):
                 if os.path.exists(temp_file):
                     os.remove(temp_file)
 
+                # Generate Invalid PDF
+                pdf_stats = {"total_rows": len(df), "issues": len(df), "converted_nid": 0}
+                pdf_geo   = {"division": entry.division, "district": entry.district, "upazila": entry.upazila}
+                temp_pdf_path = generate_pdf_report(
+                    df, pdf_stats,
+                    additional_columns=[c for c in df.columns if c not in
+                                         ["Status","Message","Excel_Row","Cleaned_DOB","Cleaned_NID", "NID", "DOB", "Batch_ID", "Source_File", "Division", "District", "Upazila"]],
+                    output_dir="downloads/temp_bulk_invalid",
+                    original_filename=f"{dist}_{upz}_invalid",
+                    geo=pdf_geo,
+                    invalid_only=True
+                )
+                if temp_pdf_path and os.path.exists(temp_pdf_path):
+                    zipf.write(temp_pdf_path, arcname=f"{div}/{dist}_{upz}_invalid.pdf")
+                    os.remove(temp_pdf_path)
+
         if not os.path.exists(zip_path) or os.path.getsize(zip_path) < 100:
             if os.path.exists(zip_path): os.remove(zip_path)
             raise HTTPException(status_code=404, detail="Zip file generation failed or empty")
 
         return FileResponse(zip_path, media_type="application/zip", filename="All_Live_Invalid_Records.zip")
     except Exception as e:
+        print(f"ERROR: Invalid-zip generation failed: {str(e)}")
         if os.path.exists(zip_path): os.remove(zip_path)
         raise HTTPException(status_code=500, detail=f"Failed to create live invalid zip: {str(e)}")
     finally:
@@ -1491,31 +1514,27 @@ async def download_trailing_zeros_pdf(
         ValidRecord.division == division,
         ValidRecord.district == district,
         ValidRecord.upazila == upazila
-    ).all()
+    ).order_by(ValidRecord.created_at.desc()).all()
     
-    records = valid_records
-    
-    # Sort descending by created_at so we only process the latest "live" attempt for each NID
-    records.sort(key=lambda x: getattr(x, 'created_at', datetime.min), reverse=True)
-    
-    trailing_records = []
-    seen_nids = set()
-    for r in records:
+    # Deduplicate by NID, keeping the latest record
+    seen_nids = {}
+    for r in valid_records:
         nid = str(r.nid or "").strip()
+        if nid and nid not in seen_nids:
+            seen_nids[nid] = r
+            
+    # Filter for 17-digit NIDs with 2+ trailing zeros
+    trailing_records = []
+    for nid, r in seen_nids.items():
         if len(nid) == 17 and nid.endswith("00"):
-            if nid not in seen_nids:
-                seen_nids.add(nid)
-                trailing_records.append(r)
+            trailing_records.append(r)
             
     if not trailing_records:
-        raise HTTPException(status_code=404, detail="No records found with 2+ trailing zeros in this upazila")
+        raise HTTPException(status_code=404, detail="No records found with 17 digits and 2+ trailing zeros in this upazila")
         
     data = []
     for r in trailing_records:
         row_data = r.data if isinstance(r.data, dict) else {}
-        # Identify source table
-        record_status = "valid" if r.__class__.__name__ == "ValidRecord" else "error"
-        
         row = {
             "Cleaned_NID": r.nid,
             "Cleaned_DOB": r.dob,
@@ -1523,8 +1542,8 @@ async def download_trailing_zeros_pdf(
             "Card_No": getattr(r, "card_no", ""),
             "Master_Serial": getattr(r, "master_serial", row_data.get("master_serial", "")),
             "Mobile": getattr(r, "mobile", row_data.get("mobile", "")),
-            "Status": record_status,
-            "Message": "Trailing 2+ zeros",
+            "Status": "valid",
+            "Message": "Trailing 2+ zeros (Validated)",
         }
         for k, v in row_data.items():
             if k not in row:
