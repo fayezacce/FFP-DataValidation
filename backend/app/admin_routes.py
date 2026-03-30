@@ -140,6 +140,24 @@ async def delete_instance(id: int, db: Session = Depends(get_db), current_user: 
     log_audit(db, current_user, "DELETE", "remote_instances", id, old_data={"name": instance_name})
     
     return {"detail": "Deleted"}
+    
+@router.post("/instances/{id}/sync", dependencies=[Depends(PermissionChecker("view_admin"))])
+async def sync_instance_data(id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """
+    Triggers a data sync from a remote instance.
+    This pulls data FROM the remote instance TO this instance.
+    """
+    from .main import trigger_remote_sync
+    return await trigger_remote_sync(id, db, current_user)
+    
+@router.post("/instances/{id}/sync", dependencies=[Depends(PermissionChecker("view_admin"))])
+async def sync_instance_data(id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """
+    Triggers a data sync from a remote instance.
+    This pulls data FROM the remote instance TO this instance.
+    """
+    from .main import trigger_remote_sync
+    return await trigger_remote_sync(id, db, current_user)
 
 @router.post("/instances/{id}/test", dependencies=[Depends(PermissionChecker("view_admin"))])
 async def test_instance(id: int, db: Session = Depends(get_db)):
@@ -338,7 +356,7 @@ async def rename_location(data: LocationRename, db: Session = Depends(get_db), c
     """
     Renames a location and cascades the change to all referencing tables.
     """
-    from .models import Division, District, Upazila, SummaryStats, ValidRecord, UploadBatch
+    from .models import Division, District, Upazila, SummaryStats, ValidRecord, InvalidRecord, UploadBatch
     
     level = data.level.lower()
     old_name = data.old_name
@@ -360,6 +378,7 @@ async def rename_location(data: LocationRename, db: Session = Depends(get_db), c
         # Update Data Tables
         db.query(SummaryStats).filter(SummaryStats.division == old_name).update({"division": new_name})
         db.query(ValidRecord).filter(ValidRecord.division == old_name).update({"division": new_name})
+        db.query(InvalidRecord).filter(InvalidRecord.division == old_name).update({"division": new_name})
         db.query(UploadBatch).filter(UploadBatch.division == old_name).update({"division": new_name})
         
     elif level == 'district':
@@ -374,6 +393,7 @@ async def rename_location(data: LocationRename, db: Session = Depends(get_db), c
         # Update Data Tables
         db.query(SummaryStats).filter(SummaryStats.district == old_name).update({"district": new_name})
         db.query(ValidRecord).filter(ValidRecord.district == old_name).update({"district": new_name})
+        db.query(InvalidRecord).filter(InvalidRecord.district == old_name).update({"district": new_name})
         db.query(UploadBatch).filter(UploadBatch.district == old_name).update({"district": new_name})
         
     elif level == 'upazila':
@@ -390,15 +410,18 @@ async def rename_location(data: LocationRename, db: Session = Depends(get_db), c
         # Update Data Tables
         q_stats = db.query(SummaryStats).filter(SummaryStats.upazila == old_name)
         q_valid = db.query(ValidRecord).filter(ValidRecord.upazila == old_name)
+        q_invalid = db.query(InvalidRecord).filter(InvalidRecord.upazila == old_name)
         q_batch = db.query(UploadBatch).filter(UploadBatch.upazila == old_name)
         
         if parent_name:
             q_stats = q_stats.filter(SummaryStats.district == parent_name)
             q_valid = q_valid.filter(ValidRecord.district == parent_name)
+            q_invalid = q_invalid.filter(InvalidRecord.district == parent_name)
             q_batch = q_batch.filter(UploadBatch.district == parent_name)
             
         q_stats.update({"upazila": new_name})
         q_valid.update({"upazila": new_name})
+        q_invalid.update({"upazila": new_name})
         q_batch.update({"upazila": new_name})
     
     else:
@@ -409,3 +432,307 @@ async def rename_location(data: LocationRename, db: Session = Depends(get_db), c
     log_audit(db, current_user, "RENAME", level, 0, old_data={"name": old_name, "parent": parent_name}, new_data={"name": new_name})
     
     return {"detail": f"Renamed {level} from {old_name} to {new_name}"}
+
+
+# --- Data Maintenance ---
+
+@router.get("/maintenance/preview-orphans", dependencies=[Depends(PermissionChecker("view_admin"))])
+async def preview_orphans(db: Session = Depends(get_db)):
+    """
+    Dry-run: shows records whose geo names don't match any canonical Upazila.
+    ZERO data changes. Safe to call at any time.
+    """
+    from .models import ValidRecord, InvalidRecord, SummaryStats, Division, District
+
+    # Build canonical sets
+    upazila_keys = {
+        (u.district_name.lower().strip(), u.name.lower().strip())
+        for u in db.query(Upazila).all()
+    }
+    divisions_map = {d.name.lower().strip(): d.id for d in db.query(Division).all()}
+    districts_map = {d.name.lower().strip(): d.id for d in db.query(District).all()}
+
+    results = {}
+    for model, label in [(ValidRecord, "valid_records"), (InvalidRecord, "invalid_records"), (SummaryStats, "summary_stats")]:
+        geo_groups = (
+            db.query(model.division, model.district, model.upazila)
+            .group_by(model.division, model.district, model.upazila)
+            .all()
+        )
+        orphans = []
+        for div_n, dist_n, upz_n in geo_groups:
+            d_key = (dist_n or "").lower().strip()
+            u_key = (upz_n or "").lower().strip()
+            if (d_key, u_key) not in upazila_keys:
+                # Count rows in this orphan group
+                count = db.query(model).filter(
+                    model.division == div_n,
+                    model.district == dist_n,
+                    model.upazila == upz_n,
+                ).count()
+                orphans.append({
+                    "division": div_n,
+                    "district": dist_n,
+                    "upazila": upz_n,
+                    "row_count": count,
+                    "issue": "no_canonical_match",
+                })
+        results[label] = {"orphan_groups": len(orphans), "orphans": orphans}
+
+    # Also count records where geo IDs are still NULL (not yet backfilled)
+    from sqlalchemy import text as _text
+    null_counts = {}
+    for tbl in ["valid_records", "invalid_records", "summary_stats", "upload_batches"]:
+        row = db.execute(_text(f"SELECT COUNT(*) FROM {tbl} WHERE upazila_id IS NULL")).fetchone()
+        null_counts[tbl] = row[0] if row else 0
+
+    return {"orphans_by_table": results, "null_geo_id_counts": null_counts}
+
+
+@router.post("/maintenance/run-cleanup", dependencies=[Depends(PermissionChecker("manage_geo"))])
+async def run_cleanup(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """
+    Safe maintenance job:
+      1. Strip trailing/leading whitespace from all geo name fields.
+      2. Backfill division_id / district_id / upazila_id for all rows using canonical names.
+    NO records are deleted. Runs entirely in-database. Admin only.
+    """
+    from .models import ValidRecord, InvalidRecord, SummaryStats, UploadBatch, Division, District
+    from sqlalchemy import text as _text
+
+    report = {"steps": [], "errors": []}
+
+    # ── Step 1: Trim whitespace from geo name columns ──────────────────────────
+    tables_and_cols = {
+        "valid_records":   ["division", "district", "upazila"],
+        "invalid_records": ["division", "district", "upazila"],
+        "summary_stats":   ["division", "district", "upazila"],
+        "upload_batches":  ["division", "district", "upazila"],
+    }
+    trimmed_total = 0
+    for tbl, cols in tables_and_cols.items():
+        for col in cols:
+            try:
+                result = db.execute(_text(
+                    f"UPDATE {tbl} SET {col} = trim({col}) WHERE {col} != trim({col})"
+                ))
+                db.commit()
+                if result.rowcount:
+                    trimmed_total += result.rowcount
+                    report["steps"].append(f"Trimmed whitespace: {result.rowcount} rows in {tbl}.{col}")
+            except Exception as e:
+                db.rollback()
+                report["errors"].append(f"Trim error on {tbl}.{col}: {str(e)}")
+
+    report["steps"].append(f"Whitespace trim complete. Total rows updated: {trimmed_total}")
+
+    # ── Step 2: Backfill geo IDs ───────────────────────────────────────────────
+    divisions = {d.name.lower().strip(): d.id for d in db.query(Division).all()}
+    districts = {d.name.lower().strip(): d.id for d in db.query(District).all()}
+    upazilas  = {
+        (u.district_name.lower().strip(), u.name.lower().strip()): u.id
+        for u in db.query(Upazila).all()
+    }
+
+    id_updated_total = 0
+    unresolved = []
+    for model, label in [
+        (ValidRecord, "valid_records"),
+        (InvalidRecord, "invalid_records"),
+        (SummaryStats, "summary_stats"),
+        (UploadBatch,  "upload_batches"),
+    ]:
+        geo_groups = (
+            db.query(model.division, model.district, model.upazila)
+            .group_by(model.division, model.district, model.upazila)
+            .all()
+        )
+        for div_n, dist_n, upz_n in geo_groups:
+            d_key   = (dist_n or "").lower().strip()
+            u_key   = (upz_n  or "").lower().strip()
+            div_key = (div_n  or "").lower().strip()
+            div_id  = divisions.get(div_key)
+            dist_id = districts.get(d_key)
+            upz_id  = upazilas.get((d_key, u_key))
+            if div_id or dist_id or upz_id:
+                try:
+                    cnt = db.query(model).filter(
+                        model.division == div_n,
+                        model.district == dist_n,
+                        model.upazila  == upz_n,
+                    ).update({
+                        "division_id": div_id,
+                        "district_id": dist_id,
+                        "upazila_id":  upz_id,
+                    }, synchronize_session=False)
+                    id_updated_total += cnt
+                    db.commit()
+                except Exception as e:
+                    db.rollback()
+                    report["errors"].append(f"ID backfill error in {label} ({div_n}/{dist_n}/{upz_n}): {str(e)}")
+            else:
+                unresolved.append({"table": label, "division": div_n, "district": dist_n, "upazila": upz_n})
+
+    report["steps"].append(f"Geo ID backfill complete. Total rows updated: {id_updated_total}")
+    if unresolved:
+        report["unresolved_geo_groups"] = unresolved
+        report["steps"].append(f"Warning: {len(unresolved)} geo group(s) could not be resolved to canonical IDs.")
+
+    log_audit(db, current_user, "MAINTENANCE", "system", 0,
+              new_data={"action": "geo_cleanup", "rows_trimmed": trimmed_total, "ids_backfilled": id_updated_total})
+
+    return {
+        "success": len(report["errors"]) == 0,
+        "rows_trimmed": trimmed_total,
+        "ids_backfilled": id_updated_total,
+        "unresolved_count": len(unresolved),
+        "report": report,
+    }
+
+
+@router.delete("/maintenance/delete-unresolved", dependencies=[Depends(PermissionChecker("manage_geo"))])
+async def delete_unresolved(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """
+    Permanently deletes all records (valid, invalid, summary_stats) whose upazila
+    cannot be resolved to a canonical entry in the upazilas master table.
+    After deletion, recalculates SummaryStats from live record counts so that
+    all totals (stats page, grand total, Excel, PDF) are consistent.
+
+    This is irreversible. Admin only.
+    """
+    from .models import ValidRecord, InvalidRecord, SummaryStats, UploadBatch, Division, District
+    from sqlalchemy import func
+
+    # 1. Build canonical (district, upazila) key set
+    canonical_keys = {
+        (u.district_name.lower().strip(), u.name.lower().strip())
+        for u in db.query(Upazila).all()
+    }
+
+    report = {"deleted": {}, "errors": []}
+    total_deleted = 0
+
+    # 2. Find all unresolvable geo groups across data tables
+    def get_unresolved_groups(model):
+        groups = (
+            db.query(model.division, model.district, model.upazila)
+            .group_by(model.division, model.district, model.upazila)
+            .all()
+        )
+        return [
+            (div_n, dist_n, upz_n) for div_n, dist_n, upz_n in groups
+            if ((dist_n or "").lower().strip(), (upz_n or "").lower().strip()) not in canonical_keys
+        ]
+
+    # 3. Delete from valid_records
+    unresolved_valid = get_unresolved_groups(ValidRecord)
+    deleted_valid = 0
+    for div_n, dist_n, upz_n in unresolved_valid:
+        try:
+            cnt = db.query(ValidRecord).filter(
+                ValidRecord.division == div_n,
+                ValidRecord.district == dist_n,
+                ValidRecord.upazila == upz_n,
+            ).delete(synchronize_session=False)
+            deleted_valid += cnt
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            report["errors"].append(f"valid_records delete error ({div_n}/{dist_n}/{upz_n}): {str(e)}")
+    report["deleted"]["valid_records"] = deleted_valid
+    total_deleted += deleted_valid
+
+    # 4. Delete from invalid_records
+    unresolved_invalid = get_unresolved_groups(InvalidRecord)
+    deleted_invalid = 0
+    for div_n, dist_n, upz_n in unresolved_invalid:
+        try:
+            cnt = db.query(InvalidRecord).filter(
+                InvalidRecord.division == div_n,
+                InvalidRecord.district == dist_n,
+                InvalidRecord.upazila == upz_n,
+            ).delete(synchronize_session=False)
+            deleted_invalid += cnt
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            report["errors"].append(f"invalid_records delete error ({div_n}/{dist_n}/{upz_n}): {str(e)}")
+    report["deleted"]["invalid_records"] = deleted_invalid
+    total_deleted += deleted_invalid
+
+    # 5. Delete summary_stats rows for unresolvable upazilas
+    unresolved_stats = get_unresolved_groups(SummaryStats)
+    deleted_stats = 0
+    for div_n, dist_n, upz_n in unresolved_stats:
+        try:
+            cnt = db.query(SummaryStats).filter(
+                SummaryStats.division == div_n,
+                SummaryStats.district == dist_n,
+                SummaryStats.upazila == upz_n,
+            ).delete(synchronize_session=False)
+            deleted_stats += cnt
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            report["errors"].append(f"summary_stats delete error ({div_n}/{dist_n}/{upz_n}): {str(e)}")
+    report["deleted"]["summary_stats"] = deleted_stats
+
+    # 6. Mark upload_batches as 'deleted' for unresolvable upazilas
+    unresolved_batches = get_unresolved_groups(UploadBatch)
+    marked_batches = 0
+    for div_n, dist_n, upz_n in unresolved_batches:
+        try:
+            cnt = db.query(UploadBatch).filter(
+                UploadBatch.division == div_n,
+                UploadBatch.district == dist_n,
+                UploadBatch.upazila == upz_n,
+                UploadBatch.status != "deleted",
+            ).update({"status": "deleted"}, synchronize_session=False)
+            marked_batches += cnt
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            report["errors"].append(f"upload_batches update error ({div_n}/{dist_n}/{upz_n}): {str(e)}")
+    report["deleted"]["upload_batches_marked"] = marked_batches
+
+    # 7. Recalculate SummaryStats from live record counts for ALL remaining upazilas
+    #    so the totals are always consistent with the actual data.
+    recalc_count = 0
+    try:
+        remaining_stats = db.query(SummaryStats).all()
+        for stat in remaining_stats:
+            live_valid = db.query(func.count(ValidRecord.id)).filter(
+                ValidRecord.district == stat.district,
+                ValidRecord.upazila  == stat.upazila,
+            ).scalar() or 0
+            live_invalid = db.query(func.count(InvalidRecord.id)).filter(
+                InvalidRecord.district == stat.district,
+                InvalidRecord.upazila  == stat.upazila,
+            ).scalar() or 0
+            stat.valid   = live_valid
+            stat.invalid = live_invalid
+            stat.total   = live_valid + live_invalid
+            recalc_count += 1
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        report["errors"].append(f"Recalculation error: {str(e)}")
+    report["recalculated_stats_rows"] = recalc_count
+
+    log_audit(db, current_user, "DELETE", "system", 0, new_data={
+        "action": "delete_unresolved_geo",
+        "deleted_valid": deleted_valid,
+        "deleted_invalid": deleted_invalid,
+        "deleted_stats": deleted_stats,
+        "recalculated": recalc_count,
+    })
+
+    return {
+        "success": len(report["errors"]) == 0,
+        "total_records_deleted": total_deleted,
+        "summary_stats_rows_deleted": deleted_stats,
+        "upload_batches_marked_deleted": marked_batches,
+        "stats_recalculated": recalc_count,
+        "report": report,
+    }
+

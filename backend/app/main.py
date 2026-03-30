@@ -198,6 +198,20 @@ def migrate_schema(db: Session):
     except Exception:
         db.rollback()
 
+    # Migration for Geo IDs across all main data tables
+    geo_id_cols = [
+        ("division_id", "INTEGER"),
+        ("district_id", "INTEGER"),
+        ("upazila_id", "INTEGER")
+    ]
+    for table in ["summary_stats", "valid_records", "invalid_records", "upload_batches"]:
+        for col_name, col_def in geo_id_cols:
+            try:
+                db.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col_name} {col_def}"))
+                db.commit()
+            except Exception:
+                db.rollback()
+
 def seed_geo_data_if_empty(db: Session):
     """Seed the divisions, districts, and upazilas tables from geo_data.json if empty."""
     import os

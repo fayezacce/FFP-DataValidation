@@ -79,6 +79,9 @@ class SummaryStats(Base):
     total = Column(Integer, default=0)        # Cumulative unique valid + invalid
     valid = Column(Integer, default=0)         # Cumulative unique valid NIDs
     invalid = Column(Integer, default=0)       # Cumulative invalid rows
+    division_id = Column(Integer, index=True, nullable=True)
+    district_id = Column(Integer, index=True, nullable=True)
+    upazila_id = Column(Integer, index=True, nullable=True)
     # Per-upload snapshot (latest upload stats)
     last_upload_total = Column(Integer, default=0)
     last_upload_valid = Column(Integer, default=0)
@@ -116,6 +119,9 @@ class UploadBatch(Base):
     total_rows = Column(Integer)
     valid_count = Column(Integer)
     invalid_count = Column(Integer)
+    division_id = Column(Integer, index=True, nullable=True)
+    district_id = Column(Integer, index=True, nullable=True)
+    upazila_id = Column(Integer, index=True, nullable=True)
     new_records = Column(Integer)
     updated_records = Column(Integer)
     status = Column(String, default="completed") # completed | deleted
@@ -131,6 +137,9 @@ class ValidRecord(Base):
     division = Column(String)
     district = Column(String)
     upazila = Column(String)
+    division_id = Column(Integer, index=True, nullable=True)
+    district_id = Column(Integer, index=True, nullable=True)
+    upazila_id = Column(Integer, index=True, nullable=True)
     source_file = Column(String)
     batch_id = Column(Integer, index=True) # Linked to upload_batches.id
     upload_batch = Column(Integer, default=1)  # Keeping this for legacy compatibility (as version)
@@ -160,6 +169,9 @@ class InvalidRecord(Base):
     division = Column(String)
     district = Column(String)
     upazila = Column(String)
+    division_id = Column(Integer, index=True, nullable=True)
+    district_id = Column(Integer, index=True, nullable=True)
+    upazila_id = Column(Integer, index=True, nullable=True)
     source_file = Column(String)
     batch_id = Column(Integer, index=True) # Linked to upload_batches.id
     upload_batch = Column(Integer, default=1)
