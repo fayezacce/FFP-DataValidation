@@ -151,12 +151,22 @@ def migrate_schema(db: Session):
         except Exception:
             db.rollback()
 
-    # New columns for valid_records
-    try:
-        db.execute(text("ALTER TABLE valid_records ADD COLUMN IF NOT EXISTS card_no VARCHAR"))
-        db.commit()
-    except Exception:
-        db.rollback()
+    # New columns for valid_records and invalid_records
+    for table in ["valid_records", "invalid_records"]:
+        try:
+            db.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS card_no VARCHAR"))
+            db.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS division_id INTEGER"))
+            db.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS district_id INTEGER"))
+            db.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS upazila_id INTEGER"))
+            db.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS batch_id INTEGER"))
+            db.commit()
+            
+            # Performance indexes for Maintenance Scan
+            idx_name = f"ix_{table}_geo_names"
+            db.execute(text(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} (division, district, upazila)"))
+            db.commit()
+        except Exception:
+            db.rollback()
 
     # New columns for invalid_records
     invalid_cols = [
