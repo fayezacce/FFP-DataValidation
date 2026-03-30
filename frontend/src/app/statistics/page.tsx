@@ -1307,18 +1307,20 @@ export default function StatisticsPage() {
 
                     <tr className="bg-slate-900 border-t-2 border-indigo-500/50 font-bold">
 
-                      <td colSpan={3} className="px-5 py-4 text-indigo-400 uppercase text-sm tracking-wider">
+                      <td className="px-5 py-4 text-indigo-400 uppercase text-sm tracking-wider font-extrabold border-r border-slate-800">
                         <span className="inline-flex items-center gap-2">
                           <CheckCircle2 className="w-5 h-5" />
-                          Grand Total Summary
+                          Grand
                         </span>
                       </td>
+                      <td className="px-5 py-4 text-indigo-400 uppercase text-sm tracking-wider font-extrabold border-r border-slate-800 text-center">Total</td>
+                      <td className="px-5 py-4 text-indigo-400 uppercase text-sm tracking-wider font-extrabold text-center">Summary</td>
 
-                      <td className="px-5 py-4 text-right font-mono text-slate-400 text-xl">{(data.entries.reduce((s, e) => s + (e.quota || 0), 0)).toLocaleString()}</td>
-                      <td className="px-5 py-4 text-right font-mono text-blue-300 text-xl">{data.grand_total.total.toLocaleString()}</td>
-                      <td className="px-5 py-4 text-right font-mono text-emerald-300 text-xl">{data.grand_total.valid.toLocaleString()}</td>
-                      <td className="px-5 py-4 text-right font-mono text-amber-300 text-xl">{Math.max(0, (data.entries.reduce((s, e) => s + (e.quota || 0), 0)) - data.grand_total.valid).toLocaleString()}</td>
-                      <td className="px-5 py-4 text-right font-mono text-red-300 text-xl">{data.grand_total.invalid.toLocaleString()}</td>
+                      <td className="px-5 py-4 text-right font-mono text-slate-400 text-lg">{(data.entries.reduce((s, e) => s + (e.quota || 0), 0)).toLocaleString()}</td>
+                      <td className="px-5 py-4 text-right font-mono text-blue-300 text-lg">{data.grand_total.total.toLocaleString()}</td>
+                      <td className="px-5 py-4 text-right font-mono text-emerald-300 text-lg">{data.grand_total.valid.toLocaleString()}</td>
+                      <td className="px-5 py-4 text-right font-mono text-amber-300 text-lg">{Math.max(0, (data.entries.reduce((s, e) => s + (e.quota || 0), 0)) - data.grand_total.valid).toLocaleString()}</td>
+                      <td className="px-5 py-4 text-right font-mono text-red-300 text-lg">{data.grand_total.invalid.toLocaleString()}</td>
                       <td colSpan={3}></td>
 
                     </tr>
