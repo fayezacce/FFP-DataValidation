@@ -53,6 +53,7 @@ export default function AdminPage() {
 
   // Maintenance State
   const [maintenanceLoading, setMaintenanceLoading] = useState(false);
+  const [maintenanceStatus, setMaintenanceStatus] = useState<any>(null);
   const [orphanPreview, setOrphanPreview] = useState<any | null>(null);
   const [cleanupResult, setCleanupResult] = useState<any | null>(null);
   const [deleteResult, setDeleteResult] = useState<any | null>(null);
@@ -153,7 +154,27 @@ export default function AdminPage() {
       return;
     }
     loadData();
-  }, [router]);
+
+    // Setup polling for maintenance tasks
+    const pollInterval = setInterval(async () => {
+      if (activeTab === 'maintenance') {
+        try {
+          const res = await fetchWithAuth(`${getBackendUrl()}/admin/maintenance/status`);
+          if (res.ok) {
+            const statusData = await res.json();
+            setMaintenanceStatus(statusData);
+            
+            // If it was running and now it's completed/error, stop local loading
+            if (statusData.cleanup?.status !== 'running') {
+              // Only clear if we explicitly started it
+            }
+          }
+        } catch (e) { console.error("Poll error", e); }
+      }
+    }, 3000);
+
+    return () => clearInterval(pollInterval);
+  }, [router, activeTab]);
 
   const loadData = async () => {
     try {
@@ -667,48 +688,49 @@ export default function AdminPage() {
                 <p className="text-[10px] text-red-400/70 mb-4 italic">⛔ Does NOT delete any records. Recommended: run Scan first.</p>
                 <button
                   onClick={async () => {
-                    if (!confirm('Run geo cleanup?\n\nThis will:\n• Trim whitespace from geo name fields\n• Backfill missing geo IDs\n\nNo records will be deleted. Continue?')) return;
+                    if (!confirm('Run geo cleanup in background?\n\nThis will:\n• Trim whitespace from geo name fields\n• Backfill missing geo IDs\n\nNo records will be deleted. Continue?')) return;
                     setMaintenanceLoading(true);
                     setCleanupResult(null);
                     try {
                       const res = await fetchWithAuth(`${getBackendUrl()}/admin/maintenance/run-cleanup`, { method: 'POST' });
                       const data = await res.json();
                       if (!res.ok) throw new Error(data.detail || 'Cleanup failed');
-                      setCleanupResult(data);
-                      showMsg(data.success ? 'Cleanup complete!' : 'Cleanup finished with some warnings.');
-                    } catch (err: any) { showMsg(err.message, true); }
-                    finally { setMaintenanceLoading(false); }
+                      showMsg('Cleanup task started in background.');
+                    } catch (err: any) { 
+                      showMsg(err.message, true); 
+                      setMaintenanceLoading(false);
+                    }
                   }}
-                  disabled={maintenanceLoading}
+                  disabled={maintenanceLoading || maintenanceStatus?.cleanup?.status === 'running'}
                   className="w-full py-3 rounded-xl bg-amber-600 hover:bg-amber-500 font-bold disabled:opacity-50 transition-colors"
                 >
-                  {maintenanceLoading ? 'Running...' : '🧹 Run Cleanup (Safe)'}
+                  {maintenanceStatus?.cleanup?.status === 'running' 
+                    ? 'Processing in Background...' 
+                    : '🧹 Run Cleanup (Safe & Optimized)'}
                 </button>
 
-                {cleanupResult && (
+                {/* Background Task Progress */}
+                {maintenanceStatus?.cleanup?.status === 'running' && (
+                  <div className="mt-4 p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 animate-pulse">
+                    <p className="text-amber-500 font-bold text-sm mb-1">Task Running...</p>
+                    <p className="text-gray-400 text-xs">{maintenanceStatus.cleanup.message}</p>
+                  </div>
+                )}
+
+                {/* Legacy cleanup result display (updated to prefer maintenanceStatus check) */}
+                {maintenanceStatus?.cleanup?.status === 'completed' && (
                   <div className="mt-4 space-y-3 text-xs">
-                    {/* Summary */}
-                    <div className={`p-3 rounded-lg border ${cleanupResult.success ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-amber-500/10 border-amber-500/20'}`}>
-                      <p className={`font-bold mb-1 ${cleanupResult.success ? 'text-emerald-400' : 'text-amber-400'}`}>
-                        {cleanupResult.success ? '✅ Completed successfully' : '⚠️ Completed with warnings'}
-                      </p>
-                      <div className="flex gap-4">
-                        <span className="text-gray-400">Rows trimmed: <strong className="text-white">{cleanupResult.rows_trimmed}</strong></span>
-                        <span className="text-gray-400">IDs backfilled: <strong className="text-white">{cleanupResult.ids_backfilled}</strong></span>
-                        {cleanupResult.unresolved_count > 0 && (
-                          <span className="text-amber-400">Unresolved: <strong>{cleanupResult.unresolved_count}</strong></span>
-                        )}
-                      </div>
+                    <div className="p-3 rounded-lg border bg-emerald-500/10 border-emerald-500/20">
+                      <p className="font-bold mb-1 text-emerald-400">✅ Cleanup successful</p>
+                      <p className="text-gray-400">{maintenanceStatus.cleanup.message}</p>
                     </div>
-                    {/* Step Log */}
-                    <div className="p-3 rounded-lg bg-[#1a1a1c] border border-[#2a2a2e] max-h-40 overflow-y-auto custom-scrollbar">
-                      {cleanupResult.report?.steps?.map((s: string, i: number) => (
-                        <p key={i} className="text-gray-400 py-0.5">{s}</p>
-                      ))}
-                      {cleanupResult.report?.errors?.map((e: string, i: number) => (
-                        <p key={`e${i}`} className="text-red-400 py-0.5">❌ {e}</p>
-                      ))}
-                    </div>
+                  </div>
+                )}
+
+                {maintenanceStatus?.cleanup?.status === 'error' && (
+                  <div className="mt-4 p-3 rounded-lg border bg-red-500/10 border-red-500/20">
+                    <p className="font-bold mb-1 text-red-400">❌ Cleanup failed</p>
+                    <p className="text-gray-400">{maintenanceStatus.cleanup.error}</p>
                   </div>
                 )}
               </div>

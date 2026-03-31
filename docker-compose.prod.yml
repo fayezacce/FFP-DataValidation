@@ -1,4 +1,4 @@
-version: '3.8'
+
 
 services:
   # ── Database ───────────────────────────────────────────────────────────────
@@ -60,10 +60,14 @@ services:
     restart: always
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
     environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-fayez}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-ffp_validator}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-fayez}:${POSTGRES_PASSWORD}@pgbouncer:6432/${POSTGRES_DB:-ffp_validator}
       - JWT_SECRET=${JWT_SECRET}
       - MAX_UPLOAD_SIZE=${MAX_UPLOAD_SIZE:-20971520}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost}
+      - POSTGRES_HOST=db
+      - POSTGRES_USER=${POSTGRES_USER:-fayez}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-ffp_validator}
     volumes:
       - backend_downloads:/app/downloads
       - backend_uploads:/app/uploads
@@ -119,6 +123,28 @@ services:
         limits:
           cpus: "0.5"
           memory: 128M
+
+  # ── PgBouncer Connection Pooler ────────────────────────────────────────
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    restart: always
+    environment:
+      - DATABASE_URL=postgres://${POSTGRES_USER:-fayez}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-ffp_validator}
+      - POOL_MODE=transaction
+      - MAX_CLIENT_CONN=200
+      - DEFAULT_POOL_SIZE=20
+      - MAX_DB_CONNECTIONS=80
+      - AUTH_TYPE=scram-sha-256
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - app_network
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64M
 
 volumes:
   backend_downloads:

@@ -80,6 +80,16 @@ export const fetchWithAuth = async (url: string, options: RequestInit = {}) => {
     }
   }
   
+  // Security lockout: show the specific message from the backend
+  if (response.status === 503) {
+    try {
+      const body = await response.clone().json();
+      if (body.detail && body.detail.includes("lockout")) {
+        alert("⚠️ Security Lockout: " + body.detail);
+      }
+    } catch { /* ignore parse errors */ }
+  }
+  
   return response;
 };
 
@@ -90,7 +100,14 @@ export const fetchWithAuth = async (url: string, options: RequestInit = {}) => {
 export const downloadFileWithAuth = async (url: string, filename?: string) => {
   try {
     const response = await fetchWithAuth(url);
-    if (!response.ok) throw new Error("Download failed");
+    if (!response.ok) {
+      let errorMsg = `Download failed (HTTP ${response.status})`;
+      try {
+        const body = await response.json();
+        if (body.detail) errorMsg = body.detail;
+      } catch { /* ignore */ }
+      throw new Error(errorMsg);
+    }
     
     // Extract filename from URL if not provided explicitly, then decode URL entities and `+` spaces
     let finalFileName = filename;

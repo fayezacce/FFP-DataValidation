@@ -11,9 +11,18 @@ from datetime import datetime
 import subprocess
 import os
 from fastapi.responses import StreamingResponse, FileResponse
-from fastapi import UploadFile, File
+from fastapi import UploadFile, File, BackgroundTasks
 import tempfile
 import shutil
+import time
+import threading
+
+# Thread-safe status tracker for maintenance jobs
+_maintenance_lock = threading.Lock()
+maintenance_task_status = {
+    "cleanup": {"status": "idle", "progress": 0, "total": 0, "message": "", "error": None, "last_run": None},
+    "delete": {"status": "idle", "progress": 0, "total": 0, "message": "", "error": None, "last_run": None}
+}
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -150,14 +159,7 @@ async def sync_instance_data(id: int, db: Session = Depends(get_db), current_use
     from .main import trigger_remote_sync
     return await trigger_remote_sync(id, db, current_user)
     
-@router.post("/instances/{id}/sync", dependencies=[Depends(PermissionChecker("view_admin"))])
-async def sync_instance_data(id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """
-    Triggers a data sync from a remote instance.
-    This pulls data FROM the remote instance TO this instance.
-    """
-    from .main import trigger_remote_sync
-    return await trigger_remote_sync(id, db, current_user)
+
 
 @router.post("/instances/{id}/test", dependencies=[Depends(PermissionChecker("view_admin"))])
 async def test_instance(id: int, db: Session = Depends(get_db)):
@@ -256,10 +258,12 @@ async def export_database(current_user: User = Depends(get_current_user)):
     """
     Exports the database to a .sql file and returns it as a download.
     """
-    db_name = "ffp_validator"
-    db_user = "fayez"
-    db_host = "db"
-    db_password = "fayez_secret"
+    db_name = os.environ.get("POSTGRES_DB", "ffp_validator")
+    db_user = os.environ.get("POSTGRES_USER", "fayez")
+    db_host = os.environ.get("POSTGRES_HOST", "db")
+    db_password = os.environ.get("POSTGRES_PASSWORD", "")
+    if not db_password:
+        raise HTTPException(status_code=500, detail="Database password not configured in environment.")
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"ffp_db_export_{timestamp}.sql"
@@ -303,10 +307,12 @@ async def import_database(file: UploadFile = File(...), db: Session = Depends(ge
     if not file.filename.endswith(".sql"):
         raise HTTPException(status_code=400, detail="Only .sql files are supported")
     
-    db_name = "ffp_validator"
-    db_user = "fayez"
-    db_host = "db"
-    db_password = "fayez_secret"
+    db_name = os.environ.get("POSTGRES_DB", "ffp_validator")
+    db_user = os.environ.get("POSTGRES_USER", "fayez")
+    db_host = os.environ.get("POSTGRES_HOST", "db")
+    db_password = os.environ.get("POSTGRES_PASSWORD", "")
+    if not db_password:
+        raise HTTPException(status_code=500, detail="Database password not configured in environment.")
     
     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".sql")
     try:
@@ -489,109 +495,111 @@ async def preview_orphans(db: Session = Depends(get_db)):
     return {"orphans_by_table": results, "null_geo_id_counts": null_counts}
 
 
-@router.post("/maintenance/run-cleanup", dependencies=[Depends(PermissionChecker("manage_geo"))])
-async def run_cleanup(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """
-    Safe maintenance job:
-      1. Strip trailing/leading whitespace from all geo name fields.
-      2. Backfill division_id / district_id / upazila_id for all rows using canonical names.
-    NO records are deleted. Runs entirely in-database. Admin only.
-    """
-    from .models import ValidRecord, InvalidRecord, SummaryStats, UploadBatch, Division, District
-    from sqlalchemy import text as _text
+@router.get("/maintenance/status", dependencies=[Depends(PermissionChecker("view_admin"))])
+async def get_maintenance_status():
+    """Poll the status of background maintenance tasks."""
+    return maintenance_task_status
 
-    report = {"steps": [], "errors": []}
 
-    # ── Step 1: Trim whitespace from geo name columns ──────────────────────────
-    tables_and_cols = {
-        "valid_records":   ["division", "district", "upazila"],
-        "invalid_records": ["division", "district", "upazila"],
-        "summary_stats":   ["division", "district", "upazila"],
-        "upload_batches":  ["division", "district", "upazila"],
-    }
-    trimmed_total = 0
-    for tbl, cols in tables_and_cols.items():
-        for col in cols:
-            try:
-                result = db.execute(_text(
-                    f"UPDATE {tbl} SET {col} = trim({col}) WHERE {col} != trim({col})"
-                ))
+def run_cleanup_background(db_session_factory, user_id, username):
+    """Heavy-lifting background job for geo-cleanup."""
+    global maintenance_task_status
+    state = maintenance_task_status["cleanup"]
+    state["status"] = "running"
+    state["progress"] = 0
+    state["message"] = "Starting cleanup..."
+    state["error"] = None
+    
+    db = db_session_factory()
+    try:
+        from .models import ValidRecord, InvalidRecord, SummaryStats, UploadBatch, Division, District, Upazila
+        from sqlalchemy import text as _text
+        
+        # 1. Trim names (Fast bulk update)
+        state["message"] = "Trimming whitespace from names..."
+        tables_and_cols = {
+            "valid_records":   ["division", "district", "upazila"],
+            "invalid_records": ["division", "district", "upazila"],
+            "summary_stats":   ["division", "district", "upazila"],
+            "upload_batches":  ["division", "district", "upazila"],
+        }
+        trimmed = 0
+        for tbl, cols in tables_and_cols.items():
+            for col in cols:
+                res = db.execute(_text(f"UPDATE {tbl} SET {col} = trim({col}) WHERE {col} != trim({col})"))
+                trimmed += res.rowcount
                 db.commit()
-                if result.rowcount:
-                    trimmed_total += result.rowcount
-                    report["steps"].append(f"Trimmed whitespace: {result.rowcount} rows in {tbl}.{col}")
-            except Exception as e:
-                db.rollback()
-                report["errors"].append(f"Trim error on {tbl}.{col}: {str(e)}")
+        
+        # 2. Bulk Backfill IDs using JOIN (High Performance)
+        state["message"] = "Backfilling IDs using canonical geo data..."
+        backfilled = 0
+        for tbl in ["valid_records", "invalid_records", "summary_stats", "upload_batches"]:
+            # Match by Upazila + District (most precise)
+            sql = f"""
+                UPDATE {tbl} t
+                SET upazila_id = u.id,
+                    district_id = u.district_id,
+                    division_id = u.division_id
+                FROM upazilas u
+                WHERE lower(t.upazila) = lower(u.name)
+                  AND lower(t.district) = lower(u.district_name)
+                  AND t.upazila_id IS NULL
+            """
+            res = db.execute(_text(sql))
+            backfilled += res.rowcount
+            db.commit()
+            
+            # Match by District (if upazila still null)
+            sql_dist = f"""
+                UPDATE {tbl} t
+                SET district_id = d.id,
+                    division_id = d.division_id
+                FROM districts d
+                WHERE lower(t.district) = lower(d.name)
+                  AND t.district_id IS NULL
+            """
+            db.execute(_text(sql_dist))
+            db.commit()
 
-    report["steps"].append(f"Whitespace trim complete. Total rows updated: {trimmed_total}")
+        state["status"] = "completed"
+        state["progress"] = 100
+        state["message"] = f"Cleanup successful. Trimmed: {trimmed}, Backfilled: {backfilled}"
+        state["last_run"] = time.time()
+        
+        # Log Audit
+        from .models import User
+        user = db.query(User).filter(User.id == user_id).first()
+        log_audit(db, user, "MAINTENANCE", "system", 0, 
+                  new_data={"action": "geo_cleanup", "trimmed": trimmed, "backfilled": backfilled})
+        
+    except Exception as e:
+        db.rollback()
+        state["status"] = "error"
+        state["error"] = str(e)
+        state["message"] = f"Cleanup failed: {str(e)}"
+    finally:
+        db.close()
 
-    # ── Step 2: Backfill geo IDs ───────────────────────────────────────────────
-    divisions = {d.name.lower().strip(): d.id for d in db.query(Division).all()}
-    districts = {d.name.lower().strip(): d.id for d in db.query(District).all()}
-    upazilas  = {
-        (u.district_name.lower().strip(), u.name.lower().strip()): u.id
-        for u in db.query(Upazila).all()
-    }
 
-    id_updated_total = 0
-    unresolved = []
-    for model, label in [
-        (ValidRecord, "valid_records"),
-        (InvalidRecord, "invalid_records"),
-        (SummaryStats, "summary_stats"),
-        (UploadBatch,  "upload_batches"),
-    ]:
-        geo_groups = (
-            db.query(model.division, model.district, model.upazila)
-            .group_by(model.division, model.district, model.upazila)
-            .all()
-        )
-        for div_n, dist_n, upz_n in geo_groups:
-            d_key   = (dist_n or "").lower().strip()
-            u_key   = (upz_n  or "").lower().strip()
-            div_key = (div_n  or "").lower().strip()
-            div_id  = divisions.get(div_key)
-            dist_id = districts.get(d_key)
-            upz_id  = upazilas.get((d_key, u_key))
-            if div_id or dist_id or upz_id:
-                try:
-                    cnt = db.query(model).filter(
-                        model.division == div_n,
-                        model.district == dist_n,
-                        model.upazila  == upz_n,
-                    ).update({
-                        "division_id": div_id,
-                        "district_id": dist_id,
-                        "upazila_id":  upz_id,
-                    }, synchronize_session=False)
-                    id_updated_total += cnt
-                    db.commit()
-                except Exception as e:
-                    db.rollback()
-                    report["errors"].append(f"ID backfill error in {label} ({div_n}/{dist_n}/{upz_n}): {str(e)}")
-            else:
-                unresolved.append({"table": label, "division": div_n, "district": dist_n, "upazila": upz_n})
-
-    report["steps"].append(f"Geo ID backfill complete. Total rows updated: {id_updated_total}")
-    if unresolved:
-        report["unresolved_geo_groups"] = unresolved
-        report["steps"].append(f"Warning: {len(unresolved)} geo group(s) could not be resolved to canonical IDs.")
-
-    log_audit(db, current_user, "MAINTENANCE", "system", 0,
-              new_data={"action": "geo_cleanup", "rows_trimmed": trimmed_total, "ids_backfilled": id_updated_total})
-
-    return {
-        "success": len(report["errors"]) == 0,
-        "rows_trimmed": trimmed_total,
-        "ids_backfilled": id_updated_total,
-        "unresolved_count": len(unresolved),
-        "report": report,
-    }
+@router.post("/maintenance/run-cleanup", dependencies=[Depends(PermissionChecker("manage_geo"))])
+async def trigger_cleanup(
+    background_tasks: BackgroundTasks, 
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
+    """Triggers the high-performance geo-cleanup in the background."""
+    global maintenance_task_status
+    if maintenance_task_status["cleanup"]["status"] == "running":
+        return {"message": "Cleanup is already running", "status": maintenance_task_status["cleanup"]}
+    
+    from .database import SessionLocal
+    background_tasks.add_task(run_cleanup_background, SessionLocal, current_user.id, current_user.username)
+    
+    return {"message": "Cleanup started in background", "task": "cleanup"}
 
 
 @router.delete("/maintenance/delete-unresolved", dependencies=[Depends(PermissionChecker("manage_geo"))])
-async def delete_unresolved(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def delete_unresolved(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Permanently deletes all records (valid, invalid, summary_stats) whose upazila
     cannot be resolved to a canonical entry in the upazilas master table.

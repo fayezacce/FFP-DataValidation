@@ -77,6 +77,10 @@ DEPLOY.sh
 backend/app/_resurrect_live_valid.py
 backend/app/main_head.py
 backend/check_rbac.py
+backend/app/scripts/archive/
+
+# ── PgBouncer credentials ───────────────────────
+pgbouncer/userlist.txt
 
 # ── OS / Editor ──────────────────────────────────
 .DS_Store

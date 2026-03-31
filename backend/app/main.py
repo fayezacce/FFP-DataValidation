@@ -42,9 +42,15 @@ from .bd_geo import fuzzy_match_location, get_division_for_district
 from . import auth_routes
 from . import admin_routes
 import urllib.parse
-# Trigger hot-reload test
 import zipfile
-import tempfile
+import logging
+
+logger = logging.getLogger("ffp")
+
+def check_security_lockout(request: Request):
+    """Reusable dependency: blocks all sensitive endpoints when default admin password is still active."""
+    if getattr(request.app.state, "security_lockout", False):
+        raise HTTPException(status_code=503, detail="Security lockout: system is running with the default admin password and contains data. Please change the admin password first.")
 
 async def lifespan(app: FastAPI):
     os.makedirs("downloads", exist_ok=True)
@@ -367,6 +373,11 @@ async def audit_api_usage_middleware(request: Request, call_next):
             except Exception:
                 pass
         
+    # Skip audit logging for noise paths (Docker healthcheck, favicon, etc.)
+    skip_paths = {"/health", "/favicon.ico", "/api/health"}
+    if request.url.path in skip_paths:
+        return response
+
     db = SessionLocal()
     try:
         log_api_usage(
@@ -379,6 +390,8 @@ async def audit_api_usage_middleware(request: Request, call_next):
             ip_address=request.client.host if request.client else "unknown",
             latency_ms=process_time
         )
+    except Exception:
+        pass  # Audit logging must never crash the response
     finally:
         db.close()
         
@@ -449,7 +462,7 @@ async def validate_excel(
     current_user: User = Depends(get_current_user) # Changed from require_role to get_current_user as PermissionChecker handles role
 ):
     if getattr(request.app.state, "security_lockout", False):
-        raise HTTPException(status_code=503, detail="Security lockout: system is running with the default admin password and contains data. Please change the admin password first.")
+        raise HTTPException(status_code=503, detail="Security lockout active. Change the default admin password via /auth/change-password.")
 
     if not file.filename.endswith(('.xlsx', '.xls')):
         raise HTTPException(status_code=400, detail="Only Excel files (.xlsx, .xls) are allowed.")
@@ -754,7 +767,7 @@ async def validate_excel(
             updated_count += 1
         else:
             new_count += 1
-            existing_map[nid] = existing_records # prevent counting twice if duplicate inside the sheet itself
+            existing_map[nid] = True  # Sentinel to prevent counting same NID twice within the sheet
             
         insert_data.append({
             "nid": nid,
@@ -1053,32 +1066,33 @@ async def delete_batch(
     if batch.status == "deleted":
         return {"message": "Batch already deleted"}
 
-    # 1. Update SummaryStats
+    # 1. Delete the records tied to this batch
+    db.query(ValidRecord).filter(ValidRecord.batch_id == batch_id).delete()
+    db.query(InvalidRecord).filter(InvalidRecord.batch_id == batch_id).delete()
+    
+    # 2. Mark batch as deleted instead of hard delete for audit
+    batch.status = "deleted"
+    db.commit()
+
+    # 3. Recalculate SummaryStats from live record counts (always accurate)
     summary = db.query(SummaryStats).filter(
         SummaryStats.district == batch.district,
         SummaryStats.upazila == batch.upazila
     ).first()
-    
     if summary:
-        # We decrease the counts. 
-        # CAUTION: If records were updated by a later batch, this hard delete might be tricky.
-        # For now, we delete all records matching this batch.
-        
-        # Count records to be deleted
-        valid_to_delete = db.query(ValidRecord).filter(ValidRecord.batch_id == batch_id).count()
-        
-        summary.valid = max(0, summary.valid - batch.new_records)
-        summary.invalid = max(0, summary.invalid - batch.invalid_count)
-        summary.total = summary.valid + summary.invalid
+        live_valid = db.query(ValidRecord).filter(
+            ValidRecord.district == batch.district,
+            ValidRecord.upazila == batch.upazila,
+        ).count()
+        live_invalid = db.query(InvalidRecord).filter(
+            InvalidRecord.district == batch.district,
+            InvalidRecord.upazila == batch.upazila,
+        ).count()
+        summary.valid = live_valid
+        summary.invalid = live_invalid
+        summary.total = live_valid + live_invalid
         summary.version += 1
-        
-    # 2. Delete the valid records
-    db.query(ValidRecord).filter(ValidRecord.batch_id == batch_id).delete()
-    db.query(InvalidRecord).filter(InvalidRecord.batch_id == batch_id).delete()
-    
-    # 3. Mark batch as deleted instead of hard delete for audit
-    batch.status = "deleted"
-    db.commit()
+        db.commit()
     
     log_audit(db, current_user, "DELETE", "upload_batch", batch_id, old_data={"filename": batch.filename})
     
@@ -1091,69 +1105,69 @@ async def delete_batch(
 # LIVE EXPORT HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _get_live_records_df(db: Session, division: str, district: str, upazila: str, is_invalid: bool = False):
-    """Fetch live records and return a formatted DataFrame."""
-    if is_invalid:
-        records = (
-            db.query(InvalidRecord)
-            .filter(
-                InvalidRecord.division == division,
-                InvalidRecord.district == district,
-                InvalidRecord.upazila  == upazila,
-            )
-            .order_by(InvalidRecord.id.desc())
-            .all()
-        )
+def _get_live_records_df(db: Session, division: str = None, district: str = None, upazila: str = None, is_invalid: bool = False, upazila_id: int = None):
+    """Fetch live records and return a formatted DataFrame. Optimized for national scale."""
+    from sqlalchemy import text
+    table_name = "invalid_records" if is_invalid else "valid_records"
+    
+    query_sql = f"""
+        SELECT 
+            nid as "NID", nid as "Cleaned_NID",
+            dob as "DOB", dob as "Cleaned_DOB",
+            name as "Name", division as "Division", district as "District",
+            upazila as "Upazila", batch_id as "Batch_ID", source_file as "Source_File",
+            data,
+            {("'error' as \"Status\", error_message as \"Message\"" if is_invalid else "'valid' as \"Status\", '' as \"Message\"")}
+        FROM {table_name}
+    """
+    
+    params = {}
+    # Priority 1: ID-based lookup (Fastest, indexed)
+    if upazila_id:
+        query_sql += " WHERE upazila_id = :uid"
+        params["uid"] = upazila_id
+    # Priority 2: Name-based fallback (Original logic)
+    elif division and district and upazila:
+        query_sql += " WHERE division = :div AND district = :dist AND upazila = :upz"
+        params.update({"div": division, "dist": district, "upz": upazila})
     else:
-        records = (
-            db.query(ValidRecord)
-            .filter(
-                ValidRecord.division == division,
-                ValidRecord.district == district,
-                ValidRecord.upazila  == upazila,
-            )
-            .order_by(ValidRecord.nid)
-            .all()
-        )
-
-    if not records:
         return None
 
-    rows = []
-    for r in records:
-        # Base columns
-        row = {
-            "Excel_Row": r.data.get("Excel_Row", "") if r.data else "",
-            "NID":      r.nid,
-            "Cleaned_NID": r.nid,
-            "DOB":      r.dob,
-            "Cleaned_DOB": r.dob,
-            "Name":     r.name,
-            "Division": r.division,
-            "District": r.district,
-            "Upazila":  r.upazila,
-            "Batch_ID": r.batch_id,
-            "Source_File": r.source_file,
-        }
+    if is_invalid:
+        query_sql += " ORDER BY id DESC"
+    else:
+        query_sql += " ORDER BY nid ASC"
+
+    # Use pandas native SQL reading for massive speedup over ORM iteration
+    df = pd.read_sql(text(query_sql), db.connection(), params=params)
+
+    if df.empty:
+        return None
+
+    # Unpack JSON dictionary directly into columns (C-optimized)
+    if 'data' in df.columns and not df['data'].isnull().all():
+        data_df = pd.json_normalize(df['data'])
+        # Drop original column and any columns we explicitly define to avoid duplicates
+        df = df.drop(columns=['data'])
+        existing_cols = set(df.columns)
+        cols_to_add = [c for c in data_df.columns if c not in existing_cols and c not in ["Status", "Message", "Excel_Row", "Cleaned_DOB", "Cleaned_NID"]]
         
-        if is_invalid:
-            row["Status"] = "error"
-            row["Message"] = r.error_message
-        else:
-            row["Status"] = "valid"
-            row["Message"] = ""
+        # Merge JSON data
+        if cols_to_add:
+            df = pd.concat([df, data_df[cols_to_add]], axis=1)
+        
+        # Manually extract Excel_Row if it exists into the dataframe since it was used in legacy logic
+        if 'Excel_Row' in data_df.columns:
+            df['Excel_Row'] = data_df['Excel_Row']
+    else:
+        if 'data' in df.columns:
+            df = df.drop(columns=['data'])
+        df['Excel_Row'] = ""
 
-        # Overlay original columns from JSON data
-        if r.data and isinstance(r.data, dict):
-            for k, v in r.data.items():
-                if k not in row and k not in ["Status", "Message", "Excel_Row", "Cleaned_DOB", "Cleaned_NID"]:
-                    row[k] = v
-        rows.append(row)
-
-    return pd.DataFrame(rows)
+    return df
 
 def _save_live_excel_nikosh(df: pd.DataFrame, path: str, sheet_name: str, is_valid: bool = True):
-    """Save DataFrame to Excel with Nikosh font and column filtering."""
+    """Save DataFrame to Excel with Nikosh font and column filtering (Optimized with xlsxwriter)."""
     exclude = [
         "Excel_Row", "NID", "Cleaned_NID", "DOB", "Cleaned_DOB", 
         "Name", "Status", "Message", "Division", "District", 
@@ -1163,26 +1177,26 @@ def _save_live_excel_nikosh(df: pd.DataFrame, path: str, sheet_name: str, is_val
         
     export_df = df.drop(columns=[c for c in exclude if c in df.columns])
     
-    with pd.ExcelWriter(path, engine='openpyxl') as writer:
+    with pd.ExcelWriter(path, engine='xlsxwriter') as writer:
         export_df.to_excel(writer, index=False, sheet_name=sheet_name)
+        workbook  = writer.book
         worksheet = writer.sheets[sheet_name]
         
-        from openpyxl.styles import Font
-        nikosh_font = Font(name='Nikosh', size=11)
-        for row in worksheet.iter_rows():
-            for cell in row:
-                cell.font = nikosh_font
+        # Apply Nikosh font instantaneously to all columns
+        format_nikosh = workbook.add_format({'font_name': 'Nikosh', 'font_size': 11})
+        worksheet.set_column(0, len(export_df.columns) - 1, None, format_nikosh)
 
 @app.get("/upazila/live-export-invalid", dependencies=[Depends(PermissionChecker("view_stats"))])
-async def upazila_live_export_invalid(
-    division: str,
-    district: str,
-    upazila: str,
+def upazila_live_export_invalid(
+    division: str = None,
+    district: str = None,
+    upazila: str = None,
+    upazila_id: int = None,
     fmt: str = "pdf",   # xlsx | pdf
     db: Session = Depends(get_db),
 ):
     """Stream a freshly generated export of ALL invalid records for the upazila."""
-    df = _get_live_records_df(db, division, district, upazila, is_invalid=True)
+    df = _get_live_records_df(db, division, district, upazila, is_invalid=True, upazila_id=upazila_id)
     if df is None:
         raise HTTPException(status_code=404, detail="No invalid records found for this upazila")
 
@@ -1213,15 +1227,16 @@ async def upazila_live_export_invalid(
     return FileResponse(path, media_type=media, filename=dl_name)
 
 @app.get("/upazila/live-export", dependencies=[Depends(PermissionChecker("view_stats"))])
-async def upazila_live_export(
-    division: str,
-    district: str,
-    upazila: str,
+def upazila_live_export(
+    division: str = None,
+    district: str = None,
+    upazila: str = None,
+    upazila_id: int = None,
     fmt: str = "xlsx",   # xlsx | pdf
     db: Session = Depends(get_db),
 ):
     """Stream a freshly generated export of ALL valid records for the upazila."""
-    df = _get_live_records_df(db, division, district, upazila, is_invalid=False)
+    df = _get_live_records_df(db, division, district, upazila, is_invalid=False, upazila_id=upazila_id)
     if df is None:
         raise HTTPException(status_code=404, detail="No valid records found for this upazila")
 
@@ -1409,7 +1424,7 @@ async def upazila_batch_files(
 
 
 @app.get("/downloads/valid-zip", dependencies=[Depends(PermissionChecker("view_stats"))])
-async def download_all_valid_zip(db: Session = Depends(get_db)):
+def download_all_valid_zip(db: Session = Depends(get_db)):
     """Zip all live valid records for all upazilas, applying Nikosh font and filtering."""
     # Query SummaryStats to know which upazilas have valid records
     entries = db.query(SummaryStats).filter(
@@ -1423,7 +1438,7 @@ async def download_all_valid_zip(db: Session = Depends(get_db)):
     zip_filename = f"all_live_valid_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
     zip_path = os.path.join("downloads", zip_filename)
     
-    print(f"DEBUG: Starting valid-zip generation for {len(entries)} entries. Path: {zip_path}")
+    logger.info(f"Starting valid-zip generation for {len(entries)} entries. Path: {zip_path}")
     try:
         with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zipf:
             for entry in entries:
@@ -1452,7 +1467,7 @@ async def download_all_valid_zip(db: Session = Depends(get_db)):
 
         return FileResponse(zip_path, media_type="application/zip", filename="All_Live_Valid_Records.zip")
     except Exception as e:
-        print(f"ERROR: Valid-zip generation failed: {str(e)}")
+        logger.error(f"Valid-zip generation failed: {str(e)}")
         if os.path.exists(zip_path): os.remove(zip_path)
         raise HTTPException(status_code=500, detail=f"Failed to create live valid zip: {str(e)}")
     finally:
@@ -1463,7 +1478,7 @@ async def download_all_valid_zip(db: Session = Depends(get_db)):
 
 
 @app.get("/downloads/invalid-zip", dependencies=[Depends(PermissionChecker("view_stats"))])
-async def download_all_invalid_zip(db: Session = Depends(get_db)):
+def download_all_invalid_zip(db: Session = Depends(get_db)):
     """Zip all live invalid records for all upazilas, applying Nikosh font."""
     entries = db.query(SummaryStats).filter(
         SummaryStats.invalid > 0
@@ -1476,7 +1491,7 @@ async def download_all_invalid_zip(db: Session = Depends(get_db)):
     zip_filename = f"all_live_invalid_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
     zip_path = os.path.join("downloads", zip_filename)
 
-    print(f"DEBUG: Starting invalid-zip generation for {len(entries)} entries. Path: {zip_path}")
+    logger.info(f"Starting invalid-zip generation for {len(entries)} entries. Path: {zip_path}")
     try:
         with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zipf:
             for entry in entries:
@@ -1517,7 +1532,7 @@ async def download_all_invalid_zip(db: Session = Depends(get_db)):
 
         return FileResponse(zip_path, media_type="application/zip", filename="All_Live_Invalid_Records.zip")
     except Exception as e:
-        print(f"ERROR: Invalid-zip generation failed: {str(e)}")
+        logger.error(f"Invalid-zip generation failed: {str(e)}")
         if os.path.exists(zip_path): os.remove(zip_path)
         raise HTTPException(status_code=500, detail=f"Failed to create live invalid zip: {str(e)}")
     finally:
@@ -1595,11 +1610,11 @@ async def download_trailing_zeros_pdf(
     
     return FileResponse(path, media_type="application/pdf", filename=f"{safe_name}.pdf")
 
-@app.get("/downloads/{filename}")
+@app.get("/downloads/{filename}", dependencies=[Depends(PermissionChecker("view_stats"))])
 async def download_file(filename: str, request: Request):
     # │ Security: strip any path separators to prevent directory traversal
     safe_name = os.path.basename(filename)
-    print(f"DEBUG: Download request for file: {safe_name}")
+
     file_path  = os.path.join("downloads", safe_name)
     # Double-check the resolved path is still inside 'downloads/'
     downloads_dir = os.path.abspath("downloads")
@@ -1659,6 +1674,7 @@ async def get_statistics(
     for u, s in entries_query:
         # Create a combined object that matches the expected StatsEntry interface
         entry_data = {
+            "id": u.id,
             "division": u.division_name,
             "district": u.district_name,
             "upazila": u.name,
@@ -1681,7 +1697,7 @@ async def get_statistics(
     # 2. Cheap ETag based on latest updated_at + row count
     latest_ts = max((e['updated_at'] for e in entries), default=datetime.utcnow())
     etag_raw  = f"{len(entries)}:{latest_ts.isoformat()}"
-    etag      = '"' + hashlib.md5(etag_raw.encode()).hexdigest() + '"'
+    etag      = '"' + hashlib.sha256(etag_raw.encode()).hexdigest()[:32] + '"'
 
     if request.headers.get("If-None-Match") == etag:
         from fastapi.responses import Response as FResponse
@@ -1797,6 +1813,12 @@ async def search_records(
         data_query = base_query.filter(ValidRecord.name.ilike(f"%{query}%"))
     else:  # default: nid
         if regex:
+            # Validate regex syntax to prevent ReDoS
+            import re as re_mod
+            try:
+                re_mod.compile(query)
+            except re_mod.error:
+                raise HTTPException(status_code=400, detail="Invalid regex pattern")
             # PostgreSQL case-insensitive regex operator
             data_query = base_query.filter(ValidRecord.nid.op("~*")(query))
         else:
@@ -1948,12 +1970,15 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 @app.post("/auth/change-password")
-async def change_password(req: ChangePasswordRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def change_password(req: ChangePasswordRequest, request: Request, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     if not verify_password(req.old_password, current_user.hashed_password):
         raise HTTPException(status_code=400, detail="Incorrect old password")
     
     current_user.hashed_password = get_password_hash(req.new_password)
     db.commit()
+    
+    # Clear security lockout if the default password was just changed
+    request.app.state.security_lockout = False
     
     log_audit(db, current_user, "UPDATE", "users", current_user.id, new_data={"action": "password_change"})
     
@@ -1993,16 +2018,18 @@ async def sync_export(
     db: Session = Depends(get_db),
     api_user: User = Depends(get_api_key)
 ):
-    """Export ValidRecords modified after the provided timestamp."""
+    """Export ValidRecords modified after the provided timestamp. Streams in chunks for 100M+ scale."""
+    from fastapi.responses import StreamingResponse
+    import json as json_mod
+    
     query = db.query(ValidRecord)
     if since:
         query = query.filter(ValidRecord.updated_at > since)
     
-    # We might want to limit the payload size in production, but for now we export all requested
-    records = query.all()
-    out = []
-    for r in records:
-        out.append({
+    total_count = query.count()
+    
+    def record_to_dict(r):
+        return {
             "nid": r.nid,
             "dob": r.dob,
             "name": r.name,
@@ -2014,19 +2041,47 @@ async def sync_export(
             "data": r.data,
             "created_at": r.created_at.isoformat() + "Z" if r.created_at else None,
             "updated_at": r.updated_at.isoformat() + "Z" if r.updated_at else None,
-        })
-    return {"records": out}
+        }
+    
+    # For small datasets, return JSON directly for backward compatibility
+    CHUNK_SIZE = 5000
+    if total_count <= CHUNK_SIZE:
+        records = query.all()
+        return {"records": [record_to_dict(r) for r in records]}
+    
+    # Stream large datasets as NDJSON (newline-delimited JSON)
+    def stream_records():
+        offset = 0
+        yield '{"total_count": ' + str(total_count) + ', "records": ['
+        first = True
+        while True:
+            batch = query.order_by(ValidRecord.id).offset(offset).limit(CHUNK_SIZE).all()
+            if not batch:
+                break
+            for r in batch:
+                prefix = '' if first else ','
+                first = False
+                yield prefix + json_mod.dumps(record_to_dict(r))
+            offset += CHUNK_SIZE
+        yield ']}'
+    
+    return StreamingResponse(stream_records(), media_type="application/json")
+
+class SyncImportPayload(BaseModel):
+    records: list = []
 
 @app.post("/sync/import")
 async def sync_import(
-    payload: dict,
+    payload: SyncImportPayload,
     db: Session = Depends(get_db),
     api_user: User = Depends(get_api_key)
 ):
-    """Import ValidRecords via bulk upsert."""
-    records = payload.get("records", [])
+    """Import ValidRecords via bulk upsert. Limited to 10,000 records per call."""
+    records = payload.records
     if not records:
         return {"imported": 0}
+    if len(records) > 10000:
+        raise HTTPException(status_code=400, detail="Import limited to 10,000 records per request. Split your payload.")
 
     insert_data = []
     for r in records:

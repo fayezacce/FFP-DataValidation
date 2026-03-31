@@ -21,8 +21,9 @@ services:
     environment:
       - MAX_UPLOAD_SIZE=20971520 # 20MB
       - DATABASE_URL=postgresql://${POSTGRES_USER:-fayez}:${POSTGRES_PASSWORD:-fayez_secret}@db:5432/ffp_validator
-      - JWT_SECRET=${JWT_SECRET:-supersecretkeyforffpdatavalidator2024_paddedoutto64characterslong}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set in .env}
       - WATCHFILES_FORCE_POLLING=true
+      - POSTGRES_HOST=db
     volumes:
       - ./backend:/app
       - ./downloads:/app/downloads
