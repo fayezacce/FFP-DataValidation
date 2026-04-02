@@ -95,3 +95,9 @@ Thumbs.db
 .vscode/
 .idea/
 backend_logs*.txt
+
+# ── Debug / Dev artifacts (never commit) ─────────
+debug_*.py
+backend/debug_*.py
+backend_crash_logs.txt
+*.sql
