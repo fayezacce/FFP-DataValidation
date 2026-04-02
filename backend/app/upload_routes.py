@@ -17,7 +17,7 @@ import logging
 from openpyxl.styles import PatternFill, Font
 import openpyxl
 
-from .database import get_db
+from .database import get_db, SessionLocal
 from .models import (
     User, SystemConfig, SummaryStats, ValidRecord, InvalidRecord,
     UploadedFile, UploadBatch, TrailingZeroWhitelist
@@ -35,6 +35,37 @@ router = APIRouter(tags=["upload"])
 
 MAX_UPLOAD_SIZE = int(os.environ.get("MAX_UPLOAD_SIZE", 20 * 1024 * 1024))
 
+
+
+@router.get("/validate/status/{task_id}")
+async def get_validation_status(task_id: int, db: Session = Depends(get_db)):
+    batch = db.query(UploadBatch).filter(UploadBatch.id == task_id).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Task not found")
+        
+    response = {
+        "status": batch.status,
+        "batch_id": batch.id,
+        "total_rows": batch.total_rows or 0,
+        "valid_count": batch.valid_count or 0,
+        "invalid_count": batch.invalid_count or 0,
+        "new_records": batch.new_records or 0,
+        "updated_records": batch.updated_records or 0
+    }
+    
+    if batch.status == "completed":
+        summary = db.query(SummaryStats).filter(
+            SummaryStats.district == batch.district,
+            SummaryStats.upazila == batch.upazila
+        ).first()
+        if summary:
+            response["pdf_url"] = summary.pdf_url
+            response["excel_url"] = summary.excel_url
+            response["excel_valid_url"] = summary.excel_valid_url
+            response["excel_invalid_url"] = summary.excel_invalid_url
+            response["pdf_invalid_url"] = summary.pdf_invalid_url
+    
+    return response
 
 @router.post("/validate", dependencies=[Depends(PermissionChecker("upload_data"))])
 async def validate_excel(
@@ -88,6 +119,19 @@ async def validate_excel(
         }
     else:
         geo = fuzzy_match_location(file.filename)
+        
+    # Check geo authorization
+    if current_user.role != "admin":
+        doc_div = geo.get("division")
+        doc_dist = geo.get("district")
+        doc_upz = geo.get("upazila")
+        
+        if getattr(current_user, "division_access", None) and doc_div != current_user.division_access:
+            raise HTTPException(status_code=403, detail=f"Access denied: You are restricted to {current_user.division_access} division.")
+        if getattr(current_user, "district_access", None) and doc_dist != current_user.district_access:
+            raise HTTPException(status_code=403, detail=f"Access denied: You are restricted to {current_user.district_access} district.")
+        if getattr(current_user, "upazila_access", None) and doc_upz != current_user.upazila_access:
+            raise HTTPException(status_code=403, detail=f"Access denied: You are restricted to {current_user.upazila_access} upazila.")
 
     try:
         tz_limit_conf = db.query(SystemConfig).filter(SystemConfig.key == "trailing_zero_limit").first()

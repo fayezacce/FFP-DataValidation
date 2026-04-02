@@ -4,6 +4,7 @@
 
 import React from "react";
 import { BarChart3, Hash, CheckCircle2, FileWarning, Clock } from "lucide-react";
+import { useTranslation } from "@/lib/useTranslation";
 
 interface DashboardCardsProps {
   grandTotal: {
@@ -15,30 +16,32 @@ interface DashboardCardsProps {
 }
 
 const DashboardCards: React.FC<DashboardCardsProps> = ({ grandTotal, loading }) => {
+  const { t } = useTranslation();
+
   const cards = [
     {
-      label: "Total Unique Records",
+      label: t("total_unique"),
       value: grandTotal.total.toLocaleString("en-IN"),
       icon: <Hash className="w-5 h-5 text-blue-400" />,
       bg: "bg-blue-500/10",
       border: "border-blue-500/20"
     },
     {
-      label: "Validated (Unique)",
+      label: t("validated_unique"),
       value: grandTotal.valid.toLocaleString("en-IN"),
       icon: <CheckCircle2 className="w-5 h-5 text-emerald-400" />,
       bg: "bg-emerald-500/10",
       border: "border-emerald-500/20"
     },
     {
-      label: "Invalid Records",
+      label: t("invalid_records"),
       value: grandTotal.invalid.toLocaleString("en-IN"),
       icon: <FileWarning className="w-5 h-5 text-red-400" />,
       bg: "bg-red-500/10",
       border: "border-red-500/20"
     },
     {
-      label: "Data Integrity",
+      label: t("data_integrity"),
       value: grandTotal.total > 0 
         ? ((grandTotal.valid / grandTotal.total) * 100).toFixed(1) + "%" 
         : "0%",

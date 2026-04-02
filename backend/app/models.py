@@ -16,6 +16,9 @@ class User(Base):
     api_total_limit = Column(Integer, nullable=True) # Overall request limit
     api_usage_count = Column(Integer, default=0)
     api_ip_whitelist = Column(String, nullable=True) # Comma-separated IPs
+    division_access = Column(String, nullable=True)
+    district_access = Column(String, nullable=True)
+    upazila_access = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class SystemConfig(Base):

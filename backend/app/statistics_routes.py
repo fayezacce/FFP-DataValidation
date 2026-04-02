@@ -41,6 +41,15 @@ async def get_statistics(
         (Upazila.name == SummaryStats.upazila) & (Upazila.district_name == SummaryStats.district),
     ).filter(Upazila.is_active == True)
 
+    # Multi-tenancy access control
+    if current_user.role != "admin":
+        if getattr(current_user, "division_access", None):
+            query = query.filter(Upazila.division_name == current_user.division_access)
+        if getattr(current_user, "district_access", None):
+            query = query.filter(Upazila.district_name == current_user.district_access)
+        if getattr(current_user, "upazila_access", None):
+            query = query.filter(Upazila.name == current_user.upazila_access)
+
     if division:
         query = query.filter(Upazila.division_name == division)
     if has_invalid:
@@ -79,16 +88,33 @@ async def get_statistics(
     if request.headers.get("If-None-Match") == etag:
         return Response(status_code=304, headers={"ETag": etag})
 
-    div_master = db.query(Division.name, func.count(District.id)).join(District, Division.name == District.division_name).group_by(Division.name).all()
-    div_counts = {row[0]: row[1] for row in div_master}
-    dist_master = db.query(District.name, func.count(Upazila.id)).join(Upazila, District.name == Upazila.district_name).group_by(District.name).all()
-    dist_counts = {row[0]: row[1] for row in dist_master}
-
-    grand = db.query(
+    div_master_query = db.query(Division.name, func.count(District.id)).join(District, Division.name == District.division_name).group_by(Division.name)
+    dist_master_query = db.query(District.name, func.count(Upazila.id)).join(Upazila, District.name == Upazila.district_name).group_by(District.name)
+    
+    grand_query = db.query(
         func.coalesce(func.sum(SummaryStats.total), 0).label("total"),
         func.coalesce(func.sum(SummaryStats.valid), 0).label("valid"),
-        func.coalesce(func.sum(SummaryStats.invalid), 0).label("invalid"),
-    ).first()
+        func.coalesce(func.sum(SummaryStats.invalid), 0).label("invalid")
+    )
+
+    if current_user.role != "admin":
+        if getattr(current_user, "division_access", None):
+            grand_query = grand_query.filter(SummaryStats.division == current_user.division_access)
+            div_master_query = div_master_query.filter(Division.name == current_user.division_access)
+            dist_master_query = dist_master_query.filter(District.division_name == current_user.division_access)
+        if getattr(current_user, "district_access", None):
+            grand_query = grand_query.filter(SummaryStats.district == current_user.district_access)
+            dist_master_query = dist_master_query.filter(District.name == current_user.district_access)
+        if getattr(current_user, "upazila_access", None):
+            grand_query = grand_query.filter(SummaryStats.upazila == current_user.upazila_access)
+            
+    if division:
+        grand_query = grand_query.filter(SummaryStats.division == division)
+
+    div_counts = {row[0]: row[1] for row in div_master_query.all()}
+    dist_counts = {row[0]: row[1] for row in dist_master_query.all()}
+
+    grand = grand_query.first()
     grand_total = {"total": grand.total, "valid": grand.valid, "invalid": grand.invalid}
 
     data = {

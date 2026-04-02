@@ -44,6 +44,9 @@ class UserOut(BaseModel):
     api_total_limit: Optional[int] = None
     api_usage_count: int = 0
     api_ip_whitelist: Optional[str] = None
+    division_access: Optional[str] = None
+    district_access: Optional[str] = None
+    upazila_access: Optional[str] = None
     
     class Config:
         from_attributes = True
@@ -115,6 +118,9 @@ class UpdateUser(BaseModel):
     api_rate_limit: Optional[int] = None
     api_total_limit: Optional[int] = None
     api_ip_whitelist: Optional[str] = None
+    division_access: Optional[str] = None
+    district_access: Optional[str] = None
+    upazila_access: Optional[str] = None
 
 @router.put("/users/{user_id}", response_model=UserOut, dependencies=[Depends(PermissionChecker("manage_users"))])
 async def update_user(
@@ -153,6 +159,21 @@ async def update_user(
     if user_update.api_ip_whitelist is not None:
         user.api_ip_whitelist = user_update.api_ip_whitelist
         new_data["api_ip_whitelist"] = user_update.api_ip_whitelist
+
+    if hasattr(user_update, "division_access") and user_update.division_access is not None:
+        val = user_update.division_access if user_update.division_access.strip() else None
+        user.division_access = val
+        new_data["division_access"] = val
+
+    if hasattr(user_update, "district_access") and user_update.district_access is not None:
+        val = user_update.district_access if user_update.district_access.strip() else None
+        user.district_access = val
+        new_data["district_access"] = val
+
+    if hasattr(user_update, "upazila_access") and user_update.upazila_access is not None:
+        val = user_update.upazila_access if user_update.upazila_access.strip() else None
+        user.upazila_access = val
+        new_data["upazila_access"] = val
         
     db.commit()
     db.refresh(user)

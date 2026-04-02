@@ -138,6 +138,9 @@ export default function AdminPage() {
   const [editApiRateLimit, setEditApiRateLimit] = useState<number>(60);
   const [editApiTotalLimit, setEditApiTotalLimit] = useState<string>("");
   const [editApiIpWhitelist, setEditApiIpWhitelist] = useState<string>("");
+  const [editDivisionAccess, setEditDivisionAccess] = useState<string>("");
+  const [editDistrictAccess, setEditDistrictAccess] = useState<string>("");
+  const [editUpazilaAccess, setEditUpazilaAccess] = useState<string>("");
 
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
@@ -203,8 +206,8 @@ export default function AdminPage() {
       if (tzRes.ok) setTzWhitelist(await tzRes.json());
 
       const [auditRes, apiRes] = await Promise.all([
-        fetchWithAuth(`${getBackendUrl()}/admin/audit-logs?limit=50`),
-        fetchWithAuth(`${getBackendUrl()}/admin/api-usage?limit=50`),
+        fetchWithAuth(`${getBackendUrl()}/audit/logs?limit=50`),
+        fetchWithAuth(`${getBackendUrl()}/audit/api-usage?limit=50`),
       ]);
 
       if (auditRes.ok) setAuditLogs(await auditRes.json());
@@ -489,6 +492,11 @@ export default function AdminPage() {
       updateData.api_rate_limit = editApiRateLimit;
       updateData.api_total_limit = editApiTotalLimit === "" ? null : parseInt(editApiTotalLimit);
       updateData.api_ip_whitelist = editApiIpWhitelist;
+
+      // Geo tenancy
+      updateData.division_access = editDivisionAccess === "" ? null : editDivisionAccess;
+      updateData.district_access = editDistrictAccess === "" ? null : editDistrictAccess;
+      updateData.upazila_access = editUpazilaAccess === "" ? null : editUpazilaAccess;
 
       const res = await fetchWithAuth(`${getBackendUrl()}/auth/users/${userId}`, {
         method: "PUT",
@@ -941,6 +949,11 @@ export default function AdminPage() {
                                         placeholder="IP Whitelist (comma-sep)"
                                       />
                                     </div>
+                                    <div className="flex space-x-1">
+                                      <input type="text" value={editDivisionAccess} onChange={(e) => setEditDivisionAccess(e.target.value)} className="bg-[#1a1a1c] border border-[#2a2a2e] text-[10px] rounded px-1.5 py-0.5 outline-none focus:border-emerald-500 flex-1 w-0 placeholder-gray-600" placeholder="Division..." />
+                                      <input type="text" value={editDistrictAccess} onChange={(e) => setEditDistrictAccess(e.target.value)} className="bg-[#1a1a1c] border border-[#2a2a2e] text-[10px] rounded px-1.5 py-0.5 outline-none focus:border-emerald-500 flex-1 w-0 placeholder-gray-600" placeholder="District..." />
+                                      <input type="text" value={editUpazilaAccess} onChange={(e) => setEditUpazilaAccess(e.target.value)} className="bg-[#1a1a1c] border border-[#2a2a2e] text-[10px] rounded px-1.5 py-0.5 outline-none focus:border-emerald-500 flex-1 w-0 placeholder-gray-600" placeholder="Upazila..." />
+                                    </div>
                                   </div>
                                 </>
                               ) : (
@@ -956,6 +969,11 @@ export default function AdminPage() {
                                   )}
                                   {u.api_ip_whitelist && (
                                     <span className="text-[10px] text-cyan-500/80" title={u.api_ip_whitelist}>IP Restricted</span>
+                                  )}
+                                  {(u.division_access || u.district_access || u.upazila_access) && (
+                                    <span className="text-[10px] text-emerald-500/80 mt-1 block px-1.5 py-0.5 bg-emerald-500/10 rounded w-fit border border-emerald-500/20">
+                                      Geo: {[u.division_access, u.district_access, u.upazila_access].filter(Boolean).join(' > ')}
+                                    </span>
                                   )}
                                 </>
                               )}
@@ -996,8 +1014,11 @@ export default function AdminPage() {
                                   setEditingUser(u);
                                   setNewRole(u.role);
                                   setEditApiRateLimit(u.api_rate_limit || "");
-                                  setEditApiTotalLimit(u.api_total_limit !== null ? u.api_total_limit.toString() : "");
+                                  setEditApiTotalLimit(u.api_total_limit !== null && u.api_total_limit !== undefined ? u.api_total_limit.toString() : "");
                                   setEditApiIpWhitelist(u.api_ip_whitelist || "");
+                                  setEditDivisionAccess(u.division_access || "");
+                                  setEditDistrictAccess(u.district_access || "");
+                                  setEditUpazilaAccess(u.upazila_access || "");
                                 }} className="text-gray-400 hover:text-white transition-colors text-xs font-bold">Edit</button>
                                 <button onClick={() => handleDeleteUser(u.id)} className="text-gray-400 hover:text-red-500 transition-colors text-xs font-bold">Del</button>
                               </div>

@@ -114,6 +114,9 @@ def migrate_schema(db: Session):
         ("api_total_limit", "INTEGER"),
         ("api_usage_count", "INTEGER DEFAULT 0"),
         ("api_ip_whitelist", "VARCHAR"),
+        ("division_access", "VARCHAR"),
+        ("district_access", "VARCHAR"),
+        ("upazila_access", "VARCHAR"),
     ]
     for col_name, col_def in new_user_columns:
         try:
@@ -386,6 +389,7 @@ from . import batch_routes
 from . import task_routes
 from . import sync_routes
 from . import geo_routes
+from . import audit_routes
 
 # API Routes v2.0 (Modular)
 app.include_router(auth_routes.router, prefix="/api/auth")
@@ -395,9 +399,10 @@ app.include_router(export_routes.router, prefix="/api/export")
 app.include_router(statistics_routes.router, prefix="/api/statistics")
 app.include_router(search_routes.router, prefix="/api")  # search/nid at root /api/search, /api/nid
 app.include_router(batch_routes.router, prefix="/api/batches")
-app.include_router(task_routes.router, prefix="/api/tasks")
-app.include_router(sync_routes.router, prefix="/api/sync")
-app.include_router(geo_routes.router, prefix="/api/geo")
+app.include_router(task_routes.router, prefix="/api/tasks", tags=["tasks"])
+app.include_router(sync_routes.router, prefix="/api/sync", tags=["sync"])
+app.include_router(geo_routes.router, prefix="/api/geo", tags=["geo"])
+app.include_router(audit_routes.router, prefix="/api/audit", tags=["audit"])
 
 
 # ─────────────────────────────────────────────────────────────────────────────

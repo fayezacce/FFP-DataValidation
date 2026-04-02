@@ -11,7 +11,9 @@ import { fetchWithAuth, getBackendUrl, downloadFileWithAuth } from "@/lib/auth";
 
 import { StatsEntry, StatsResponse, Batch } from "@/types/ffp";
 import DashboardCards from "@/components/DashboardCards";
+import AnalyticsCharts from "@/components/AnalyticsCharts";
 import StatsTable from "@/components/StatsTable";
+import { useTranslation } from "@/lib/useTranslation";
 import BatchHistoryModal from "@/components/BatchHistoryModal";
 import EditStatsModal from "@/components/EditStatsModal";
 
@@ -22,6 +24,7 @@ export default function StatisticsPage() {
   
   const [user, setUser] = useState<any>(null);
   const [isMounted, setIsMounted] = useState(false);
+  const { lang, toggleLang, t } = useTranslation();
 
   useEffect(() => {
     setIsMounted(true);
@@ -276,10 +279,15 @@ export default function StatisticsPage() {
               <ArrowLeft className="w-5 h-5 text-slate-400" />
             </Link>
             <div>
-              <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight bg-gradient-to-r from-cyan-400 to-blue-400 bg-clip-text text-transparent">
-                Statistics Dashboard
-              </h1>
-              <p className="text-sm text-slate-400 mt-1">Validation results by Division, District & Upazila</p>
+              <div className="flex items-center gap-3">
+                <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight bg-gradient-to-r from-cyan-400 to-blue-400 bg-clip-text text-transparent">
+                  {t("stats_title")}
+                </h1>
+                <button onClick={toggleLang} className="px-3 py-1 bg-slate-800 rounded-md text-sm border border-slate-700 hover:bg-slate-700 text-white">
+                  {lang === 'en' ? 'বাংলা' : 'English'}
+                </button>
+              </div>
+              <p className="text-sm text-slate-400 mt-1">{t("stats_subtitle")}</p>
             </div>
           </div>
           
@@ -288,7 +296,7 @@ export default function StatisticsPage() {
               <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 group-focus-within:text-indigo-400 transition-colors" />
               <input
                 type="text"
-                placeholder="Search district or upazila..."
+                placeholder={t("search")}
                 value={searchTerm}
                 onChange={e => setSearchTerm(e.target.value)}
                 className="pl-9 pr-4 py-2 bg-slate-800/50 border border-slate-700 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-500/50 w-64 transition-all"
@@ -299,13 +307,13 @@ export default function StatisticsPage() {
               onClick={() => setShowInvalidOnly(prev => !prev)}
               className={`px-4 py-2 rounded-lg font-medium flex items-center gap-2 transition-all text-sm border ${showInvalidOnly ? 'bg-red-600/30 border-red-500/50 text-red-300' : 'bg-slate-800/50 border-slate-700/50 text-slate-400'}`}
             >
-              <FileWarning className="w-4 h-4" /> {showInvalidOnly ? 'Showing Invalid' : 'Invalid Only'}
+              <FileWarning className="w-4 h-4" /> {showInvalidOnly ? t("showing_invalid") : t("invalid_only")}
             </button>
             <Link href="/search" className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600/20 text-indigo-400 text-sm border border-indigo-500/30">
-              <SearchIcon className="w-4 h-4" /> Search Records
+              <SearchIcon className="w-4 h-4" /> {t("search_records")}
             </Link>
             <button onClick={fetchStats} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm flex gap-2">
-              <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} /> Refresh
+              <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} /> {t("refresh")}
             </button>
           </div>
         </header>
@@ -314,6 +322,9 @@ export default function StatisticsPage() {
 
         {/* Grand Total Cards */}
         {data && <DashboardCards grandTotal={data.grand_total} loading={loading} />}
+
+        {/* Dashboard Analytics Charts */}
+        {data && <AnalyticsCharts hierarchy={hierarchy} />}
 
         {/* Empty State */}
         {!loading && data && data.entries.length === 0 && (

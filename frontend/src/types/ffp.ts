@@ -64,5 +64,8 @@ export interface User {
   api_ip_whitelist?: string;
   api_usage_count?: number;
   api_key_last_used?: string;
+  division_access?: string;
+  district_access?: string;
+  upazila_access?: string;
   created_at: string;
 }

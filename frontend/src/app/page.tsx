@@ -5,8 +5,9 @@ import Link from "next/link";
 import { useDropzone } from "react-dropzone";
 import * as XLSX from "xlsx";
 import { useRouter } from "next/navigation";
-import { UploadCloud, FileSpreadsheet, AlertCircle, CheckCircle2, FileWarning, Play, Download, MapPin, BarChart3, Database } from "lucide-react";
+import { UploadCloud, FileSpreadsheet, AlertCircle, CheckCircle2, FileWarning, Play, Download, MapPin, BarChart3, Database, Loader2, CheckCircle } from "lucide-react";
 import { fetchWithAuth, getBackendUrl, downloadFileWithAuth, isAuthenticated } from "@/lib/auth";
+import { useTranslation } from "@/lib/useTranslation";
 
 export default function Home() {
   const router = useRouter();
@@ -30,6 +31,7 @@ export default function Home() {
   const [showAdditionalColumns, setShowAdditionalColumns] = useState(false);
   const [isCorrection, setIsCorrection] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [pollingStatus, setPollingStatus] = useState<{ status: string; valid: number; invalid: number; new_records: number; total: number; message?: string } | null>(null);
   const [geoData, setGeoData] = useState<{
     divisions: string[];
     districts: Record<string, string[]>;
@@ -69,6 +71,7 @@ export default function Home() {
   const mapColumnsRef = useRef<HTMLDivElement>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
   const errorRef = useRef<HTMLDivElement>(null);
+  const { lang, toggleLang, t } = useTranslation();
 
   useEffect(() => {
     if (error) {
@@ -304,13 +307,14 @@ export default function Home() {
     }
   }, [file, dobColumn, nidColumn, headerRow, selectedSheet]);
 
-  const runValidation = async () => {
+    const runValidation = async () => {
     if (!file || !dobColumn || !nidColumn) {
       setError("Please select a file and map both DOB and NID columns.");
       return;
     }
 
     setLoading(true);
+    setPollingStatus(null);
     setError(null);
 
     const formData = new FormData();
@@ -337,13 +341,56 @@ export default function Home() {
       }
 
       const data = await res.json();
-      setResults(data);
+      if (data.status === "queued" && data.task_id) {
+          // start polling
+          setPollingStatus({ status: "processing", valid: 0, invalid: 0, new_records: 0, total: 0 });
+          pollTask(data.task_id);
+      } else {
+          setResults(data);
+          setLoading(false);
+      }
     } catch (err: any) {
       setError(err.message || "An unexpected error occurred.");
-    } finally {
       setLoading(false);
-    }
+    } 
   };
+
+  const pollTask = async (taskId: number) => {
+      try {
+          const res = await fetchWithAuth(`${getBackendUrl()}/upload/validate/status/${taskId}`);
+          if (!res.ok) throw new Error("Status check failed");
+          const data = await res.json();
+          
+          setPollingStatus({ 
+              status: data.status, 
+              valid: data.valid_count, 
+              invalid: data.invalid_count, 
+              new_records: data.new_records,
+              total: data.total_rows 
+          });
+
+          if (data.status === "processing") {
+              setTimeout(() => pollTask(taskId), 2000);
+          } else if (data.status === "completed") {
+              setResults({
+                  ...data,
+                  // Keep earlier preview behavior if anything
+                  preview_data: previewRows || []
+              });
+              setLoading(false);
+              setPollingStatus(null);
+          } else if (data.status === "failed") {
+              setError("Background processing failed.");
+              setLoading(false);
+              setPollingStatus(null);
+          }
+      } catch (err: any) {
+          setError(err.message || "Polling failed.");
+          setLoading(false);
+          setPollingStatus(null);
+      }
+  };
+
 
   // All file download URLs go through nginx /downloads proxy (same origin, no CORS)
   const getDownloadUrl = (path: string) => path;
@@ -353,20 +400,28 @@ export default function Home() {
       <div className="max-w-6xl mx-auto space-y-8 flex-1 w-full">
 
         {/* Header */}
-        <header className="text-center space-y-4">
-          <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent">
-            Data Validator
-          </h1>
-          <p className="text-lg text-slate-400 max-w-2xl mx-auto">
-            Upload your excel files to automatically normalize digits, clean dates, and validate NID numbers.
-          </p>
-          <Link
-            href="/statistics"
-            className="inline-flex items-center gap-2 text-sm text-cyan-400 hover:text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/20 px-4 py-2 rounded-lg transition-all"
-          >
-            <BarChart3 className="w-4 h-4" />
-            View Statistics Dashboard
-          </Link>
+        <header className="flex flex-col sm:flex-row items-center justify-between space-y-4 sm:space-y-0 text-center sm:text-left">
+          <div className="flex-1" />
+          <div className="flex-none text-center space-y-4">
+            <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent">
+              {t("title")}
+            </h1>
+            <p className="text-lg text-slate-400 max-w-2xl mx-auto">
+              {t("subtitle")}
+            </p>
+            <Link
+              href="/statistics"
+              className="inline-flex items-center gap-2 text-sm text-cyan-400 hover:text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/20 px-4 py-2 rounded-lg transition-all"
+            >
+              <BarChart3 className="w-4 h-4" />
+              {t("view_stats")}
+            </Link>
+          </div>
+          <div className="flex-1 flex justify-end items-start pt-2">
+            <button onClick={toggleLang} className="px-3 py-1 bg-slate-800 rounded-md text-sm border border-slate-700 hover:bg-slate-700">
+              {lang === 'en' ? 'বাংলা' : 'English'}
+            </button>
+          </div>
         </header>
 
         {/* Upload Zone */}
@@ -380,12 +435,12 @@ export default function Home() {
               <input {...getInputProps()} />
               <UploadCloud className="w-16 h-16 mx-auto mb-4 text-slate-400" />
               {isDragActive ? (
-                <p className="text-xl font-medium text-blue-400">Drop the Excel file here...</p>
+                <p className="text-xl font-medium text-blue-400">{t("drop_here")}</p>
               ) : (
                 <div>
-                  <p className="text-xl font-medium">Drag & drop your Excel file here</p>
-                  <p className="text-sm text-slate-500 mt-2">or click to browse from your computer</p>
-                  <p className="text-xs text-slate-600 mt-4">Supported formats: .xlsx, .xls</p>
+                  <p className="text-xl font-medium">{t("drag_drop")}</p>
+                  <p className="text-sm text-slate-500 mt-2">{t("click_browse")}</p>
+                  <p className="text-xs text-slate-600 mt-4">{t("supported_formats")}</p>
                 </div>
               )}
             </div>
@@ -687,17 +742,29 @@ export default function Home() {
                 </button>
               )}
               <button
-                onClick={runValidation}
-                disabled={loading || !dobColumn || !nidColumn || previewLoading || previewBlocked}
-                className="bg-indigo-600 hover:bg-indigo-500 text-white px-8 py-3 rounded-xl font-medium flex items-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-indigo-500/20 active:scale-95"
-              >
+              onClick={runValidation}
+              disabled={loading || previewBlocked}
+              className={`w-full py-5 rounded-xl font-bold tracking-widest uppercase transition-all shadow-xl shadow-indigo-500/20 active:translate-y-1 mt-8 mb-4 border border-transparent 
+                ${loading
+                  ? 'bg-indigo-600/50 text-indigo-200 cursor-wait'
+                  : previewBlocked
+                    ? 'bg-slate-700/50 text-slate-500 cursor-not-allowed border-red-500/20'
+                    : 'bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white'}`}
+            >
+              <div className="flex items-center justify-center gap-3">
                 {loading ? (
-                  <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  <>
+                    <Loader2 className="w-6 h-6 animate-spin" />
+                    {pollingStatus ? `Processing... (${pollingStatus.valid} Valid | ${pollingStatus.invalid} Invalid)` : 'Validating Data...'}
+                  </>
                 ) : (
-                  <Play className="w-5 h-5" />
+                  <>
+                    <CheckCircle className="w-6 h-6" />
+                    Start Full Validation
+                  </>
                 )}
-                {previewBlocked ? "Blocked — Fix Column Mapping" : loading ? "Processing full file..." : previewLoading ? "Testing columns..." : "Start Full Validation"}
-              </button>
+              </div>
+            </button>
             </div>
           </div>
         )}
