@@ -167,14 +167,26 @@ export default function StatisticsPage() {
 
 
 
-  const handleDownloadAllValid = () => {
-    downloadFileWithAuth("/api/downloads/valid-zip", "all_valid_records.zip");
+  const handleDownloadAllValid = async () => {
+    try {
+      const res = await fetchWithAuth("/api/downloads/valid-zip", { method: "POST" });
+      if (res.ok) {
+        alert("Valid records zip task started! Check the Task Tray in the bottom right corner.");
+      } else {
+        alert("Failed to start valid records zip task");
+      }
+    } catch(e) { console.error(e); }
   };
 
-
-
-  const handleDownloadAllInvalid = () => {
-    downloadFileWithAuth("/api/downloads/invalid-zip", "all_invalid_records.zip");
+  const handleDownloadAllInvalid = async () => {
+    try {
+      const res = await fetchWithAuth("/api/downloads/invalid-zip", { method: "POST" });
+      if (res.ok) {
+        alert("Invalid records zip task started! Check the Task Tray in the bottom right corner.");
+      } else {
+        alert("Failed to start invalid records zip task");
+      }
+    } catch(e) { console.error(e); }
   };
 
   const buildLiveExportInvalidUrl = (entry: StatsEntry, fmt: string) => {

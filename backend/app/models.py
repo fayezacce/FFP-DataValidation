@@ -240,3 +240,16 @@ class TrailingZeroWhitelist(Base):
     nid = Column(String, unique=True, index=True, nullable=False)
     added_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+class BackgroundTask(Base):
+    __tablename__ = "background_tasks"
+    id = Column(String, primary_key=True, index=True) # UUID string
+    task_name = Column(String, index=True, nullable=False)
+    user_id = Column(Integer, index=True, nullable=True) # ID of user who started it
+    status = Column(String, default="pending", index=True) # pending, running, completed, error
+    progress = Column(Integer, default=0) # 0-100
+    message = Column(String, nullable=True)
+    result_url = Column(String, nullable=True) # Link to download file
+    error_details = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

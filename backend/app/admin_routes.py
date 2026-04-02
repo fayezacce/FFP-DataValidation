@@ -17,12 +17,8 @@ import shutil
 import time
 import threading
 
-# Thread-safe status tracker for maintenance jobs
-_maintenance_lock = threading.Lock()
-maintenance_task_status = {
-    "cleanup": {"status": "idle", "progress": 0, "total": 0, "message": "", "error": None, "last_run": None},
-    "delete": {"status": "idle", "progress": 0, "total": 0, "message": "", "error": None, "last_run": None}
-}
+# Background task status now tracked via BackgroundTask DB model
+
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -435,6 +431,17 @@ async def rename_location(data: LocationRename, db: Session = Depends(get_db), c
         
     db.commit()
     
+    # Refresh SummaryStats after rename
+    from .stats_utils import refresh_summary_stats
+    if level == 'upazila':
+        # Refresh for the new name
+        refresh_summary_stats(db, "", parent_name or "", new_name)
+    elif level == 'district':
+        # Refresh all Upazilas in this district
+        upazilas = db.query(Upazila).filter(Upazila.district_name == new_name).all()
+        for upz in upazilas:
+            refresh_summary_stats(db, upz.division_name, new_name, upz.name)
+    
     log_audit(db, current_user, "RENAME", level, 0, old_data={"name": old_name, "parent": parent_name}, new_data={"name": new_name})
     
     return {"detail": f"Renamed {level} from {old_name} to {new_name}"}
@@ -496,27 +503,46 @@ async def preview_orphans(db: Session = Depends(get_db)):
 
 
 @router.get("/maintenance/status", dependencies=[Depends(PermissionChecker("view_admin"))])
-async def get_maintenance_status():
-    """Poll the status of background maintenance tasks."""
-    return maintenance_task_status
-
-
-def run_cleanup_background(db_session_factory, user_id, username):
-    """Heavy-lifting background job for geo-cleanup."""
-    global maintenance_task_status
-    state = maintenance_task_status["cleanup"]
-    state["status"] = "running"
-    state["progress"] = 0
-    state["message"] = "Starting cleanup..."
-    state["error"] = None
+async def get_maintenance_status(db: Session = Depends(get_db)):
+    """Poll the status of background maintenance tasks to support legacy UI."""
+    from .models import BackgroundTask
+    cleanup_task = db.query(BackgroundTask).filter(BackgroundTask.task_name == "geo_cleanup").order_by(BackgroundTask.created_at.desc()).first()
+    delete_task = db.query(BackgroundTask).filter(BackgroundTask.task_name == "geo_delete").order_by(BackgroundTask.created_at.desc()).first()
     
+    return {
+        "cleanup": {
+            "status": cleanup_task.status if cleanup_task else "idle",
+            "progress": cleanup_task.progress if cleanup_task else 0,
+            "message": cleanup_task.message if cleanup_task else "",
+            "error": cleanup_task.error_details if cleanup_task else None,
+            "last_run": cleanup_task.created_at.isoformat() if cleanup_task else None
+        },
+        "delete": {
+            "status": delete_task.status if delete_task else "idle",
+            "message": delete_task.message if delete_task else "",
+            "error": delete_task.error_details if delete_task else None,
+            "last_run": delete_task.created_at.isoformat() if delete_task else None
+        }
+    }
+
+
+def run_cleanup_background(db_session_factory, task_id: str, user_id: int, username: str):
+    """Heavy-lifting background job for geo-cleanup."""
     db = db_session_factory()
+    from .models import BackgroundTask
+    task = db.query(BackgroundTask).filter(BackgroundTask.id == task_id).first()
+    if not task:
+        db.close()
+        return
+
+    task.status = "running"
+    db.commit()
+    task.message = "Trimming whitespace from names..."
     try:
         from .models import ValidRecord, InvalidRecord, SummaryStats, UploadBatch, Division, District, Upazila
         from sqlalchemy import text as _text
         
         # 1. Trim names (Fast bulk update)
-        state["message"] = "Trimming whitespace from names..."
         tables_and_cols = {
             "valid_records":   ["division", "district", "upazila"],
             "invalid_records": ["division", "district", "upazila"],
@@ -524,16 +550,23 @@ def run_cleanup_background(db_session_factory, user_id, username):
             "upload_batches":  ["division", "district", "upazila"],
         }
         trimmed = 0
-        for tbl, cols in tables_and_cols.items():
+        for idx, (tbl, cols) in enumerate(tables_and_cols.items()):
+            task.progress = int((idx / 4) * 50) # first half of progress
+            db.commit()
             for col in cols:
                 res = db.execute(_text(f"UPDATE {tbl} SET {col} = trim({col}) WHERE {col} != trim({col})"))
                 trimmed += res.rowcount
                 db.commit()
         
         # 2. Bulk Backfill IDs using JOIN (High Performance)
-        state["message"] = "Backfilling IDs using canonical geo data..."
+        task.message = "Backfilling IDs using canonical geo data..."
+        db.commit()
         backfilled = 0
-        for tbl in ["valid_records", "invalid_records", "summary_stats", "upload_batches"]:
+        tables = ["valid_records", "invalid_records", "summary_stats", "upload_batches"]
+        from .stats_utils import refresh_summary_stats
+        for idx, tbl in enumerate(tables):
+            task.progress = 50 + int((idx / 4) * 50)
+            db.commit()
             # Match by Upazila + District (most precise)
             sql = f"""
                 UPDATE {tbl} t
@@ -561,10 +594,10 @@ def run_cleanup_background(db_session_factory, user_id, username):
             db.execute(_text(sql_dist))
             db.commit()
 
-        state["status"] = "completed"
-        state["progress"] = 100
-        state["message"] = f"Cleanup successful. Trimmed: {trimmed}, Backfilled: {backfilled}"
-        state["last_run"] = time.time()
+        task.status = "completed"
+        task.progress = 100
+        task.message = f"Cleanup successful. Trimmed: {trimmed}, Backfilled: {backfilled}"
+        db.commit()
         
         # Log Audit
         from .models import User
@@ -574,12 +607,14 @@ def run_cleanup_background(db_session_factory, user_id, username):
         
     except Exception as e:
         db.rollback()
-        state["status"] = "error"
-        state["error"] = str(e)
-        state["message"] = f"Cleanup failed: {str(e)}"
+        task.status = "error"
+        task.error_details = str(e)
+        task.message = f"Cleanup failed: {str(e)}"
+        db.commit()
     finally:
         db.close()
 
+import uuid
 
 @router.post("/maintenance/run-cleanup", dependencies=[Depends(PermissionChecker("manage_geo"))])
 async def trigger_cleanup(
@@ -588,14 +623,29 @@ async def trigger_cleanup(
     current_user: User = Depends(get_current_user)
 ):
     """Triggers the high-performance geo-cleanup in the background."""
-    global maintenance_task_status
-    if maintenance_task_status["cleanup"]["status"] == "running":
-        return {"message": "Cleanup is already running", "status": maintenance_task_status["cleanup"]}
+    from .models import BackgroundTask
+    running_task = db.query(BackgroundTask).filter(
+        BackgroundTask.task_name == "geo_cleanup", 
+        BackgroundTask.status == "running"
+    ).first()
+    if running_task:
+        return {"message": "Cleanup is already running", "status": {"status": "running"}}
     
+    task_id = str(uuid.uuid4())
+    task = BackgroundTask(
+        id=task_id,
+        task_name="geo_cleanup",
+        user_id=current_user.id,
+        status="pending",
+        message="Trimming whitespace from names..."
+    )
+    db.add(task)
+    db.commit()
+
     from .database import SessionLocal
-    background_tasks.add_task(run_cleanup_background, SessionLocal, current_user.id, current_user.username)
+    background_tasks.add_task(run_cleanup_background, SessionLocal, task_id, current_user.id, current_user.username)
     
-    return {"message": "Cleanup started in background", "task": "cleanup"}
+    return {"message": "Cleanup started in background", "task_id": task_id}
 
 
 @router.delete("/maintenance/delete-unresolved", dependencies=[Depends(PermissionChecker("manage_geo"))])
@@ -743,4 +793,23 @@ def delete_unresolved(db: Session = Depends(get_db), current_user: User = Depend
         "stats_recalculated": recalc_count,
         "report": report,
     }
+
+@router.post("/maintenance/refresh-stats", dependencies=[Depends(PermissionChecker("manage_geo"))])
+async def manual_refresh_stats(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """
+    Manually triggers a full re-calculation of all SummaryStats rows.
+    Ensures that the dashboard perfectly aligns with Detail records.
+    """
+    from .models import SummaryStats
+    from .stats_utils import refresh_summary_stats
+    
+    all_stats = db.query(SummaryStats).all()
+    count = 0
+    for stat in all_stats:
+        refresh_summary_stats(db, stat.division, stat.district, stat.upazila)
+        count += 1
+    
+    log_audit(db, current_user, "MAINTENANCE", "summary_stats", 0, new_data={"action": "full_stats_recalc", "rows": count})
+    
+    return {"detail": f"Successfully refreshed {count} statistics rows."}
 

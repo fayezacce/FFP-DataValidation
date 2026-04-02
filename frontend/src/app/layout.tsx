@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import NavBar from "@/components/NavBar";
+import TaskTray from "@/components/TaskTray";
 
 export const metadata: Metadata = {
   title: "Food Friendly Program Data Validator",
@@ -23,6 +24,7 @@ export default function RootLayout({
         <main>
           {children}
         </main>
+        <TaskTray />
       </body>
     </html>
   );

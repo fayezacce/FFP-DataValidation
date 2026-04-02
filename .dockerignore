@@ -12,3 +12,4 @@ uploads/
 *.xlsx
 .git/
 .vscode/
+.agent/

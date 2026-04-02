@@ -82,6 +82,9 @@ backend/app/scripts/archive/
 # ── PgBouncer credentials ───────────────────────
 pgbouncer/userlist.txt
 
+# ── AI Agent Config (local workspace only) ──────
+.agent/
+
 # ── OS / Editor ──────────────────────────────────
 .DS_Store
 Thumbs.db

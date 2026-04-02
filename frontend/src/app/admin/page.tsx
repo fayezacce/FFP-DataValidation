@@ -164,9 +164,11 @@ export default function AdminPage() {
             const statusData = await res.json();
             setMaintenanceStatus(statusData);
             
-            // If it was running and now it's completed/error, stop local loading
-            if (statusData.cleanup?.status !== 'running') {
-              // Only clear if we explicitly started it
+            // Clear loading state when background task finishes
+            const cleanupDone = statusData.cleanup?.status === 'completed' || statusData.cleanup?.status === 'error';
+            const deleteDone = statusData.delete?.status !== 'running';
+            if (cleanupDone && deleteDone) {
+              setMaintenanceLoading(false);
             }
           }
         } catch (e) { console.error("Poll error", e); }
