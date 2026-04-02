@@ -1,6 +1,10 @@
 from sqlalchemy import Column, Integer, String, DateTime, Float, Index, JSON, UniqueConstraint, Boolean
 from .database import Base
-from datetime import datetime
+from datetime import datetime, timezone
+
+
+def _utcnow():
+    return datetime.now(timezone.utc)
 
 class User(Base):
     __tablename__ = "users"
@@ -19,7 +23,7 @@ class User(Base):
     division_access = Column(String, nullable=True)
     district_access = Column(String, nullable=True)
     upazila_access = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
 class SystemConfig(Base):
     __tablename__ = "system_configs"
@@ -28,7 +32,7 @@ class SystemConfig(Base):
     key = Column(String, unique=True, index=True, nullable=False)
     value = Column(String, nullable=False)
     description = Column(String, nullable=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
 class RemoteInstance(Base):
     __tablename__ = "remote_instances"
@@ -39,7 +43,7 @@ class RemoteInstance(Base):
     api_key = Column(String, nullable=False)
     is_active = Column(Boolean, default=True)
     last_synced_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
 class Division(Base):
     __tablename__ = "divisions"
@@ -99,8 +103,8 @@ class SummaryStats(Base):
     excel_valid_url = Column(String)
     excel_invalid_url = Column(String)
     pdf_invalid_url = Column(String)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     # Ensure unique constraint on district/upazila combo
     __table_args__ = (
@@ -128,7 +132,7 @@ class UploadBatch(Base):
     new_records = Column(Integer)
     updated_records = Column(Integer)
     status = Column(String, default="completed") # completed | deleted
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
 class ValidRecord(Base):
     __tablename__ = "valid_records"
@@ -148,8 +152,8 @@ class ValidRecord(Base):
     upload_batch = Column(Integer, default=1)  # Keeping this for legacy compatibility (as version)
     card_no = Column(String, index=True) # Unique card number for upazila
     data = Column(JSON)  # Stores all original Excel fields
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     __table_args__ = (
         Index('ix_nid_dob', 'nid', 'dob'),
@@ -183,8 +187,8 @@ class InvalidRecord(Base):
     mobile = Column(String, index=True) # Secondary identifier
     error_message = Column(String)  # The validation failure reason
     data = Column(JSON)  # Stores all original Excel fields
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     __table_args__ = (
         Index('ix_invalid_record_district_upazila', 'district', 'upazila'),
@@ -200,7 +204,7 @@ class UploadedFile(Base):
     filename = Column(String)
     original_name = Column(String)
     filepath = Column(String)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
 class Permission(Base):
     __tablename__ = "permissions"
@@ -223,7 +227,7 @@ class AuditLog(Base):
     target_table = Column(String, index=True)
     target_id = Column(String)
     details = Column(JSON) # e.g. {"old": {...}, "new": {...}}
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
 class ApiUsageLog(Base):
     __tablename__ = "api_usage_logs"
@@ -235,14 +239,14 @@ class ApiUsageLog(Base):
     status_code = Column(Integer)
     ip_address = Column(String)
     latency_ms = Column(Float)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
 class TrailingZeroWhitelist(Base):
     __tablename__ = "trailing_zero_whitelist"
     id = Column(Integer, primary_key=True, index=True)
     nid = Column(String, unique=True, index=True, nullable=False)
     added_by = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
 class BackgroundTask(Base):
     __tablename__ = "background_tasks"
@@ -254,5 +258,5 @@ class BackgroundTask(Base):
     message = Column(String, nullable=True)
     result_url = Column(String, nullable=True) # Link to download file
     error_details = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)

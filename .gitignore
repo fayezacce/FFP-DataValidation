@@ -72,6 +72,7 @@ upazila_page.html
 test_output.txt
 test3_out.txt
 DEPLOY.sh
+refactor_*.py
 
 # ── Stale dev scripts (backend) ─────────────────
 backend/app/_resurrect_live_valid.py

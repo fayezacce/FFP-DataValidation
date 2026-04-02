@@ -210,8 +210,8 @@ export default function AdminPage() {
         fetchWithAuth(`${getBackendUrl()}/audit/api-usage?limit=50`),
       ]);
 
-      if (auditRes.ok) setAuditLogs(await auditRes.json());
-      if (apiRes.ok) setApiLogs(await apiRes.json());
+      if (auditRes.ok) { const d = await auditRes.json(); setAuditLogs(d.items || d); }
+      if (apiRes.ok) { const d = await apiRes.json(); setApiLogs(d.items || d); }
 
     } catch (err: any) {
       setError(err.message);
