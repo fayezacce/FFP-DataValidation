@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from .database import get_db
-from .models import User, SystemConfig, RemoteInstance, Upazila, TrailingZeroWhitelist
+from .models import User, SystemConfig, RemoteInstance, Upazila, TrailingZeroWhitelist, AuditLog, ApiUsageLog
 from .auth import get_current_user
 from .rbac import PermissionChecker
 from .audit import log_audit
@@ -20,7 +20,7 @@ import threading
 # Background task status now tracked via BackgroundTask DB model
 
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+router = APIRouter(tags=["admin"])
 
 # --- System Configs ---
 
@@ -812,4 +812,16 @@ async def manual_refresh_stats(db: Session = Depends(get_db), current_user: User
     log_audit(db, current_user, "MAINTENANCE", "summary_stats", 0, new_data={"action": "full_stats_recalc", "rows": count})
     
     return {"detail": f"Successfully refreshed {count} statistics rows."}
+
+
+@router.get("/audit-logs", dependencies=[Depends(PermissionChecker("view_admin"))])
+async def get_audit_logs(limit: int = 100, db: Session = Depends(get_db)):
+    """Admin-only: Retrieve system audit logs."""
+    return db.query(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit).all()
+
+
+@router.get("/api-usage", dependencies=[Depends(PermissionChecker("view_admin"))])
+async def get_api_usage(limit: int = 100, db: Session = Depends(get_db)):
+    """Admin-only: Retrieve API usage logs."""
+    return db.query(ApiUsageLog).order_by(ApiUsageLog.created_at.desc()).limit(limit).all()
 

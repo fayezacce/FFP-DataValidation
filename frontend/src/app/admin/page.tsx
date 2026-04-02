@@ -228,7 +228,7 @@ export default function AdminPage() {
     e.preventDefault();
     setActionLoading(true);
     try {
-      const response = await fetchWithAuth(`${getBackendUrl()} /auth/users`, {
+      const response = await fetchWithAuth(`${getBackendUrl()}/auth/users`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username: newUsername, password: newPassword, role: newRole }),
@@ -242,7 +242,7 @@ export default function AdminPage() {
   const handleDeleteUser = async (id: number) => {
     if (!confirm("Delete user?")) return;
     try {
-      const response = await fetchWithAuth(`${getBackendUrl()} /auth/users / ${id} `, { method: "DELETE" });
+      const response = await fetchWithAuth(`${getBackendUrl()}/auth/users/${id}`, { method: "DELETE" });
       if (!response.ok) throw new Error("Failed to delete user");
       showMsg("User deleted"); loadData();
     } catch (err: any) { showMsg(err.message, true); }
@@ -297,7 +297,7 @@ export default function AdminPage() {
     e.preventDefault();
     setActionLoading(true);
     try {
-      const response = await fetchWithAuth(`${getBackendUrl()} /admin/instances`, {
+      const response = await fetchWithAuth(`${getBackendUrl()}/admin/instances`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: instName, url: instUrl, api_key: instApiKey }),
@@ -310,7 +310,7 @@ export default function AdminPage() {
   const handleDeleteInstance = async (id: number) => {
     if (!confirm("Delete instance?")) return;
     try {
-      await fetchWithAuth(`${getBackendUrl()} /admin/instances / ${id} `, { method: "DELETE" });
+      await fetchWithAuth(`${getBackendUrl()}/admin/instances/${id}`, { method: "DELETE" });
       showMsg("Instance deleted"); loadData();
     } catch (err: any) { showMsg(err.message, true); }
   };
@@ -318,7 +318,7 @@ export default function AdminPage() {
   const handleSyncInstance = async (id: number) => {
     setActionLoading(true);
     try {
-      const response = await fetchWithAuth(`${getBackendUrl()} /admin/instances / ${id}/trigger-sync`, { method: "POST" });
+      const response = await fetchWithAuth(`${getBackendUrl()}/admin/instances/${id}/trigger-sync`, { method: "POST" });
       if (!response.ok) throw new Error((await response.json()).detail || "Sync failed");
       const data = await response.json();
       showMsg(`Sync complete. Imported ${data.synced_count} records.`); loadData();

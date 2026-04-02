@@ -387,16 +387,17 @@ from . import task_routes
 from . import sync_routes
 from . import geo_routes
 
-app.include_router(auth_routes.router)
-app.include_router(admin_routes.router)
-app.include_router(upload_routes.router)
-app.include_router(export_routes.router)
-app.include_router(statistics_routes.router)
-app.include_router(search_routes.router)
-app.include_router(batch_routes.router)
-app.include_router(task_routes.router)
-app.include_router(sync_routes.router)
-app.include_router(geo_routes.router)
+# API Routes v2.0 (Modular)
+app.include_router(auth_routes.router, prefix="/api/auth")
+app.include_router(admin_routes.router, prefix="/api/admin")
+app.include_router(upload_routes.router, prefix="/api/upload")
+app.include_router(export_routes.router, prefix="/api/export")
+app.include_router(statistics_routes.router, prefix="/api/statistics")
+app.include_router(search_routes.router, prefix="/api")  # search/nid at root /api/search, /api/nid
+app.include_router(batch_routes.router, prefix="/api/batches")
+app.include_router(task_routes.router, prefix="/api/tasks")
+app.include_router(sync_routes.router, prefix="/api/sync")
+app.include_router(geo_routes.router, prefix="/api/geo")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

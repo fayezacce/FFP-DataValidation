@@ -134,7 +134,7 @@ def save_live_excel_nikosh(df: pd.DataFrame, path: str, sheet_name: str, is_vali
 # LIVE EXPORT ENDPOINTS
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.get("/upazila/live-export-invalid", dependencies=[Depends(PermissionChecker("view_stats"))])
+@router.get("/live-invalid", dependencies=[Depends(PermissionChecker("view_stats"))])
 def upazila_live_export_invalid(
     division: str = None,
     district: str = None,
@@ -173,7 +173,7 @@ def upazila_live_export_invalid(
     return FileResponse(path, media_type=media, filename=dl_name)
 
 
-@router.get("/upazila/live-export", dependencies=[Depends(PermissionChecker("view_stats"))])
+@router.get("/live", dependencies=[Depends(PermissionChecker("view_stats"))])
 def upazila_live_export(
     division: str = None,
     district: str = None,
@@ -220,7 +220,7 @@ def upazila_live_export(
 # RECHECK — fraud detection on stored valid records
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.post("/upazila/recheck", dependencies=[Depends(PermissionChecker("view_admin"))])
+@router.post("/recheck", dependencies=[Depends(PermissionChecker("view_admin"))])
 async def upazila_recheck(
     division: str,
     district: str,
@@ -310,7 +310,7 @@ async def upazila_recheck(
 # TRAILING ZEROS PDF
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.get("/upazila/trailing-zeros-pdf", dependencies=[Depends(PermissionChecker("view_stats"))])
+@router.get("/trailing-zeros-pdf", dependencies=[Depends(PermissionChecker("view_stats"))])
 async def download_trailing_zeros_pdf(
     division: str,
     district: str,
@@ -379,7 +379,7 @@ async def download_trailing_zeros_pdf(
 # FILE DOWNLOAD — authenticated static file serving
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.get("/downloads/{filename}", dependencies=[Depends(PermissionChecker("view_stats"))])
+@router.get("/download/{filename}", dependencies=[Depends(PermissionChecker("view_stats"))])
 async def download_file(filename: str):
     """Serve a file from the downloads directory with path traversal protection."""
     safe_name = os.path.basename(filename)
@@ -406,7 +406,7 @@ async def download_file(filename: str):
 # ZIP GENERATION — background tasks for bulk exports
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.post("/downloads/valid-zip", dependencies=[Depends(PermissionChecker("view_stats"))])
+@router.post("/zip-valid", dependencies=[Depends(PermissionChecker("view_stats"))])
 def start_valid_zip_task(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
@@ -494,7 +494,7 @@ def _generate_valid_zip_bg(task_id: str):
         task.progress = 100
         task.status = "completed"
         task.message = "Zip generated successfully"
-        task.result_url = f"/api/downloads/{urllib.parse.quote(zip_filename)}"
+        task.result_url = f"/api/export/download/{urllib.parse.quote(zip_filename)}"
         db.commit()
 
     except Exception as e:
@@ -511,7 +511,7 @@ def _generate_valid_zip_bg(task_id: str):
         db.close()
 
 
-@router.post("/downloads/invalid-zip", dependencies=[Depends(PermissionChecker("view_stats"))])
+@router.post("/zip-invalid", dependencies=[Depends(PermissionChecker("view_stats"))])
 def start_invalid_zip_task(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
@@ -612,7 +612,7 @@ def _generate_invalid_zip_bg(task_id: str):
         task.progress = 100
         task.status = "completed"
         task.message = "Zip generated successfully"
-        task.result_url = f"/api/downloads/{urllib.parse.quote(zip_filename)}"
+        task.result_url = f"/api/export/download/{urllib.parse.quote(zip_filename)}"
         db.commit()
 
     except Exception as e:

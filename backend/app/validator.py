@@ -1,5 +1,6 @@
 import pandas as pd
 import re
+import unicodedata
 from datetime import datetime
 
 # Bengali to English digits mapping
@@ -14,6 +15,14 @@ def normalize_digits(text):
     if text is None:
         return ""
     return str(text).strip().translate(_BEN_TRANS)
+
+def normalize_col(text):
+    """Normalize column names for fuzzy matching using NFKC normalization and slugification."""
+    if not text:
+        return ""
+    # Normalize unicode (handles 'য়' vs 'য়' etc)
+    text = unicodedata.normalize('NFKC', str(text))
+    return re.sub(r'\W+', '', text.strip().lower())
 
 def clean_dob(value) -> tuple[str, str]:
     """Returns (cleaned_date_str, year_str) or (None, None)"""
@@ -63,13 +72,17 @@ def check_fake_nid(nid: str, tz_limit: int = 0, tz_whitelist: set = None) -> tup
     if not nid or len(nid) < 10:
         return False, ""
 
-    # All same digit  e.g. 1111111111
+    # All zeros (e.g. 0000000000)
+    if all(c == '0' for c in nid):
+        return True, "All-zero NID"
+
+    # All same digit (e.g. 1111111111)
     if len(set(nid)) == 1:
         return True, "All-same-digit NID"
 
-    # All zeros
-    if all(c == '0' for c in nid):
-        return True, "All-zero NID"
+    # Trust whitelisted NIDs fully (skip all further fraud checks)
+    if tz_whitelist and nid in tz_whitelist:
+        return False, ""
 
     # Trailing double zero (or more) for 17-digit NIDs only
     if len(nid) == 17:
@@ -127,21 +140,6 @@ def validate_nid(nid_raw, dob_year, tz_limit: int = 0, tz_whitelist: set = None)
 
     return final_nid, status, message
 
-def normalize_col(c: str) -> str:
-    """Normalizes a column name for fuzzy matching."""
-    if not c:
-        return ""
-    # Remove all whitespace, newlines, and dots (used by pandas for duplicates like Name.1)
-    s = str(c).lower()
-    # Remove pandas duplicate suffixes like .1, .2, .3
-    import re
-    s = re.sub(r'\.\d+$', '', s)
-    # Remove frontend duplicate suffixes like (2), (3)
-    s = re.sub(r'\s*\(\d+\)$', '', s)
-    # Remove all non-alphanumeric/bangla chars
-    s = re.sub(r'[^\w\u0980-\u09ff]', '', s)
-    return s
-
 def resolve_column_name(target: str, available_cols: list) -> str:
     """
     Finds the best match for target in available_cols.
@@ -165,8 +163,26 @@ def resolve_column_name(target: str, available_cols: list) -> str:
         if c.strip().lower() == t_clean:
             return available_cols[i]
             
-    # 3. Slug matching
-    import re
+    # 3. Bengali Mapping (Semantic)
+    semantic_map = {
+        "name": ["উপকারভোগীর নাম", "উপকার ভোগীর নাম", "উপকারভোগীর নাম (বাংলা)", "নাম", "উপকারভোগীরনামবাংলাএনআইডি", "beneficiary name", "name"],
+        "nid": ["জাতীয় পরিচয় পত্র নম্বর", "জাতীয় পরিচয় পত্র নম্বর", "জাতীয় পরিচয়পত্র নম্বর", "জাতীয়পরিচয়পত্রনম্বর", "এনআইডি", "nid number", "nid"],
+        "dob": ["date of birth", "dob", "জন্মতারিখ", "জন্ম তারিখ", "জম্ম তারিখ", "জম্মতারিখ", "জন্মতারিখএনআইডি"],
+        "mobile": ["মোবাইল নং", "মোবাইল নম্বর", "মোবাইল নম্বর এনআইডি", "মোবাইল নং (নিজ নামে)", "mobile number", "mobile no"]
+    }
+    
+    t_clean = normalize_col(target_str)
+    for key, variants in semantic_map.items():
+        if t_clean == key or t_clean in [normalize_col(v) for v in variants]:
+            # If the target itself is a semantic key or variant, 
+            # check if ANY of the variants exist in available_cols
+            for v in variants:
+                v_slug = normalize_col(v)
+                for i, col in enumerate(available_list):
+                    if normalize_col(col) == v_slug:
+                        return available_cols[i]
+
+    # 4. Slug matching
     def get_index_suffix(s):
         # Extract .1 or (2)
         m = re.search(r'[\.\s\(]+(\d+)[\)]*$', s)

@@ -18,7 +18,7 @@ from enum import Enum
 from fastapi import Request
 from .auth import limiter
 
-router = APIRouter(prefix="/auth", tags=["auth"])
+router = APIRouter(tags=["auth"])
 
 class UserRole(str, Enum):
     admin = "admin"

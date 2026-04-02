@@ -19,7 +19,7 @@ logger = logging.getLogger("ffp")
 router = APIRouter(tags=["batches"])
 
 
-@router.get("/statistics/history", dependencies=[Depends(PermissionChecker("view_stats"))])
+@router.get("/history", dependencies=[Depends(PermissionChecker("view_stats"))])
 async def get_upazila_history(
     district: str,
     upazila: str,
@@ -40,7 +40,7 @@ async def get_upazila_history(
     return batches
 
 
-@router.delete("/batches/{batch_id}", dependencies=[Depends(PermissionChecker("manage_geo"))])
+@router.delete("/{batch_id}", dependencies=[Depends(PermissionChecker("manage_geo"))])
 async def delete_batch(
     batch_id: int,
     db: Session = Depends(get_db),
@@ -77,7 +77,7 @@ async def delete_batch(
     return {"message": "Batch deleted successfully", "deleted_valid": batch.new_records}
 
 
-@router.get("/upazila/batch-files", dependencies=[Depends(PermissionChecker("view_stats"))])
+@router.get("/upazila-files", dependencies=[Depends(PermissionChecker("view_stats"))])
 async def upazila_batch_files(
     division: str,
     district: str,
@@ -105,10 +105,10 @@ async def upazila_batch_files(
             "invalid_count": b.invalid_count,
             "new_records": b.new_records,
             "updated_records": b.updated_records,
-            "valid_url": f"/api/downloads/{urllib.parse.quote(safe + '_valid.xlsx')}",
-            "invalid_url": f"/api/downloads/{urllib.parse.quote(safe + '_invalid.xlsx')}",
-            "pdf_url": f"/api/downloads/{urllib.parse.quote(safe + '_validation_Report.pdf')}",
-            "pdf_invalid_url": f"/api/downloads/{urllib.parse.quote(safe + '_invalid_Report.pdf')}",
+            "valid_url": f"/api/export/download/{urllib.parse.quote(safe + '_valid.xlsx')}",
+            "invalid_url": f"/api/export/download/{urllib.parse.quote(safe + '_invalid.xlsx')}",
+            "pdf_url": f"/api/export/download/{urllib.parse.quote(safe + '_validation_Report.pdf')}",
+            "pdf_invalid_url": f"/api/export/download/{urllib.parse.quote(safe + '_invalid_Report.pdf')}",
         }
         for key in ("valid_url", "invalid_url", "pdf_url", "pdf_invalid_url"):
             local = os.path.join("downloads", urllib.parse.unquote(os.path.basename(entry[key])))

@@ -16,7 +16,7 @@ import logging
 from .database import get_db
 from .models import (
     User, SummaryStats, ValidRecord, InvalidRecord, UploadBatch,
-    Division, District, Upazila, AuditLog, ApiUsageLog,
+    Division, District, Upazila,
 )
 from .auth import get_current_user
 from .rbac import PermissionChecker
@@ -27,7 +27,7 @@ logger = logging.getLogger("ffp")
 router = APIRouter(tags=["statistics"])
 
 
-@router.get("/statistics", dependencies=[Depends(PermissionChecker("view_stats"))])
+@router.get("/", dependencies=[Depends(PermissionChecker("view_stats"))])
 async def get_statistics(
     request: Request,
     has_invalid: bool = False,
@@ -107,7 +107,7 @@ async def get_statistics(
     return JSONResponse(content=data, headers={"ETag": etag, "Cache-Control": "private, no-store"})
 
 
-@router.delete("/statistics/{division}/{district}/{upazila}", dependencies=[Depends(PermissionChecker("view_admin"))])
+@router.delete("/{division}/{district}/{upazila}", dependencies=[Depends(PermissionChecker("manage_geo"))])
 async def delete_upazila_data(
     division: str,
     district: str,
@@ -136,7 +136,7 @@ class ManualStatsUpdate(BaseModel):
     invalid: int
 
 
-@router.put("/statistics/update", dependencies=[Depends(PermissionChecker("manage_geo"))])
+@router.put("/update", dependencies=[Depends(PermissionChecker("manage_geo"))])
 async def update_statistics(
     update: ManualStatsUpdate,
     db: Session = Depends(get_db),
@@ -160,12 +160,3 @@ async def update_statistics(
     log_audit(db, current_user, "UPDATE", "summary_stats", summary.id, new_data={"action": "summary_update"})
     return summary
 
-
-@router.get("/admin/audit-logs", dependencies=[Depends(PermissionChecker("view_admin"))])
-async def get_audit_logs(limit: int = 100, db: Session = Depends(get_db)):
-    return db.query(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit).all()
-
-
-@router.get("/admin/api-usage", dependencies=[Depends(PermissionChecker("view_admin"))])
-async def get_api_usage(limit: int = 100, db: Session = Depends(get_db)):
-    return db.query(ApiUsageLog).order_by(ApiUsageLog.created_at.desc()).limit(limit).all()

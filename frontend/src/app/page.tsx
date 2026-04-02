@@ -97,7 +97,7 @@ export default function Home() {
   useEffect(() => {
     const fetchGeoInfo = async () => {
       try {
-        const res = await fetchWithAuth(`${getBackendUrl()}/geo-info`);
+        const res = await fetchWithAuth(`${getBackendUrl()}/geo/info`);
         if (res.ok) {
           const data = await res.json();
           setGeoData(data);
@@ -119,7 +119,7 @@ export default function Home() {
 
       const fetchGuess = async () => {
         try {
-          const res = await fetchWithAuth(`${getBackendUrl()}/guess-location?filename=${encodeURIComponent(selected.name)}`);
+          const res = await fetchWithAuth(`${getBackendUrl()}/geo/guess?filename=${encodeURIComponent(selected.name)}`);
           if (res.ok) {
             const data = await res.json();
             if (data.division && data.division !== "Unknown") setSelectedDivision(data.division);
@@ -277,7 +277,7 @@ export default function Home() {
     formData.append("sheet_name", selectedSheet);
 
     try {
-      const res = await fetchWithAuth(`${getBackendUrl()}/preview`, {
+      const res = await fetchWithAuth(`${getBackendUrl()}/upload/preview`, {
         method: "POST",
         body: formData,
       });
@@ -326,7 +326,7 @@ export default function Home() {
     if (selectedUpazila) formData.append("upazila", selectedUpazila);
 
     try {
-      const res = await fetchWithAuth(`${getBackendUrl()}/validate`, {
+      const res = await fetchWithAuth(`${getBackendUrl()}/upload/validate`, {
         method: "POST",
         body: formData,
       });

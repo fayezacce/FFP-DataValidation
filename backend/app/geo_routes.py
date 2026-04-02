@@ -18,7 +18,7 @@ logger = logging.getLogger("ffp")
 router = APIRouter(tags=["geo"])
 
 
-@router.get("/geo-info", dependencies=[Depends(PermissionChecker("view_geo"))])
+@router.get("/info", dependencies=[Depends(PermissionChecker("view_geo"))])
 async def get_geo_info(db: Session = Depends(get_db)):
     """Return the hierarchy of divisions, districts, and upazilas."""
     from .bd_geo import _division_lookup, _district_lookup, get_dynamic_upazilas
@@ -42,7 +42,7 @@ async def get_geo_info(db: Session = Depends(get_db)):
     return {"divisions": divisions, "districts": districts, "upazilas": upazilas}
 
 
-@router.get("/guess-location")
+@router.get("/guess")
 async def guess_location(filename: str):
     """Guess the location from the filename."""
     from .bd_geo import fuzzy_match_location
@@ -54,7 +54,7 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 
-@router.post("/auth/change-password")
+@router.post("/change-password")
 async def change_password(
     req: ChangePasswordRequest,
     request: Request,
