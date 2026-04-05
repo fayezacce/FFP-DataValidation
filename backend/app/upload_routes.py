@@ -501,11 +501,11 @@ async def validate_excel(
         current_version=current_version,
     )
 
-    summary.pdf_url = f"/api/downloads/{urllib.parse.quote(filename)}"
-    summary.pdf_invalid_url = f"/api/downloads/{urllib.parse.quote(pdf_invalid_filename)}" if pdf_invalid_filename else ""
-    summary.excel_url = f"/api/downloads/{urllib.parse.quote(excel_filename)}" if excel_filename else ""
-    summary.excel_valid_url = f"/api/downloads/{urllib.parse.quote(excel_valid_filename)}" if excel_valid_filename else ""
-    summary.excel_invalid_url = f"/api/downloads/{urllib.parse.quote(excel_invalid_filename)}" if excel_invalid_filename else ""
+    summary.pdf_url = f"/api/export/download/{urllib.parse.quote(filename)}"
+    summary.pdf_invalid_url = f"/api/export/download/{urllib.parse.quote(pdf_invalid_filename)}" if pdf_invalid_filename else ""
+    summary.excel_url = f"/api/export/download/{urllib.parse.quote(excel_filename)}" if excel_filename else ""
+    summary.excel_valid_url = f"/api/export/download/{urllib.parse.quote(excel_valid_filename)}" if excel_valid_filename else ""
+    summary.excel_invalid_url = f"/api/export/download/{urllib.parse.quote(excel_invalid_filename)}" if excel_invalid_filename else ""
     db.commit()
     db.refresh(summary)
 
@@ -539,11 +539,11 @@ async def validate_excel(
         "batch_id": batch.id,
         "version": summary.version,
         "updated_at": summary.updated_at.isoformat() + "Z",
-        "pdf_url": f"/api/downloads/{urllib.parse.quote(filename)}",
-        "pdf_invalid_url": f"/api/downloads/{urllib.parse.quote(pdf_invalid_filename)}",
-        "excel_url": f"/api/downloads/{urllib.parse.quote(excel_filename)}",
-        "excel_valid_url": f"/api/downloads/{urllib.parse.quote(excel_valid_filename)}",
-        "excel_invalid_url": f"/api/downloads/{urllib.parse.quote(excel_invalid_filename)}",
+        "pdf_url": f"/api/export/download/{urllib.parse.quote(filename)}",
+        "pdf_invalid_url": f"/api/export/download/{urllib.parse.quote(pdf_invalid_filename)}",
+        "excel_url": f"/api/export/download/{urllib.parse.quote(excel_filename)}",
+        "excel_valid_url": f"/api/export/download/{urllib.parse.quote(excel_valid_filename)}",
+        "excel_invalid_url": f"/api/export/download/{urllib.parse.quote(excel_invalid_filename)}",
         "preview_data": preview_data,
     }
 

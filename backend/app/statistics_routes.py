@@ -27,7 +27,7 @@ logger = logging.getLogger("ffp")
 router = APIRouter(tags=["statistics"])
 
 
-@router.get("/", dependencies=[Depends(PermissionChecker("view_stats"))])
+@router.get("", dependencies=[Depends(PermissionChecker("view_stats"))])
 async def get_statistics(
     request: Request,
     has_invalid: bool = False,
@@ -58,7 +58,7 @@ async def get_statistics(
     entries_query = query.order_by(Upazila.division_name, Upazila.district_name, Upazila.name).all()
 
     entries = []
-    now = datetime.now(timezone.utc)
+    now = datetime.utcnow()
     for u, s in entries_query:
         entry_data = {
             "id": u.id,
@@ -73,11 +73,11 @@ async def get_statistics(
             "version": s.version if s else 0,
             "created_at": (s.created_at if s else now),
             "updated_at": (s.updated_at if s else now),
-            "pdf_url": f"/api/upazila/live-export?division={urllib.parse.quote(u.division_name)}&district={urllib.parse.quote(u.district_name)}&upazila={urllib.parse.quote(u.name)}&fmt=pdf",
-            "pdf_invalid_url": f"/api/upazila/live-export-invalid?division={urllib.parse.quote(u.division_name)}&district={urllib.parse.quote(u.district_name)}&upazila={urllib.parse.quote(u.name)}&fmt=pdf",
-            "excel_url": f"/api/upazila/live-export?division={urllib.parse.quote(u.division_name)}&district={urllib.parse.quote(u.district_name)}&upazila={urllib.parse.quote(u.name)}&fmt=xlsx",
-            "excel_valid_url": f"/api/upazila/live-export?division={urllib.parse.quote(u.division_name)}&district={urllib.parse.quote(u.district_name)}&upazila={urllib.parse.quote(u.name)}&fmt=xlsx",
-            "excel_invalid_url": f"/api/upazila/live-export-invalid?division={urllib.parse.quote(u.division_name)}&district={urllib.parse.quote(u.district_name)}&upazila={urllib.parse.quote(u.name)}&fmt=xlsx",
+            "pdf_url": f"/api/export/live?division={urllib.parse.quote(u.division_name)}&district={urllib.parse.quote(u.district_name)}&upazila={urllib.parse.quote(u.name)}&fmt=pdf",
+            "pdf_invalid_url": f"/api/export/live-invalid?division={urllib.parse.quote(u.division_name)}&district={urllib.parse.quote(u.district_name)}&upazila={urllib.parse.quote(u.name)}&fmt=pdf",
+            "excel_url": f"/api/export/live?division={urllib.parse.quote(u.division_name)}&district={urllib.parse.quote(u.district_name)}&upazila={urllib.parse.quote(u.name)}&fmt=xlsx",
+            "excel_valid_url": f"/api/export/live?division={urllib.parse.quote(u.division_name)}&district={urllib.parse.quote(u.district_name)}&upazila={urllib.parse.quote(u.name)}&fmt=xlsx",
+            "excel_invalid_url": f"/api/export/live-invalid?division={urllib.parse.quote(u.division_name)}&district={urllib.parse.quote(u.district_name)}&upazila={urllib.parse.quote(u.name)}&fmt=xlsx",
         }
         entries.append(entry_data)
 

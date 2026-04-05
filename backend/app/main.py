@@ -291,7 +291,7 @@ def _migrate_json_to_db(db: Session):
 # ─────────────────────────────────────────────────────────────────────────────
 
 docs_url = None if os.environ.get("DISABLE_DOCS", "true").lower() == "true" else "/docs"
-app = FastAPI(title="FFP Data Validator API", docs_url=docs_url, redoc_url=None, lifespan=lifespan)
+app = FastAPI(title="FFP Data Validator API", docs_url=docs_url, redoc_url=None, lifespan=lifespan, strict_slashes=False)
 
 
 # ── Middleware ────────────────────────────────────────────────────────────────
@@ -308,8 +308,8 @@ async def audit_api_usage_middleware(request: Request, call_next):
     user = getattr(request.state, "user", None)
     user_id = username = None
     if user:
-        user_id = getattr(request.state, "user_id", getattr(user, "id", None))
-        username = getattr(request.state, "username", getattr(user, "username", None))
+        user_id = getattr(request.state, "user_id", None)
+        username = getattr(request.state, "username", None)
 
     skip_paths = {"/health", "/favicon.ico", "/api/health"}
     if request.url.path in skip_paths:
@@ -392,17 +392,17 @@ from . import geo_routes
 from . import audit_routes
 
 # API Routes v2.0 (Modular)
-app.include_router(auth_routes.router, prefix="/api/auth")
-app.include_router(admin_routes.router, prefix="/api/admin")
-app.include_router(upload_routes.router, prefix="/api/upload")
-app.include_router(export_routes.router, prefix="/api/export")
-app.include_router(statistics_routes.router, prefix="/api/statistics")
-app.include_router(search_routes.router, prefix="/api")  # search/nid at root /api/search, /api/nid
-app.include_router(batch_routes.router, prefix="/api/batches")
-app.include_router(task_routes.router, prefix="/api/tasks", tags=["tasks"])
-app.include_router(sync_routes.router, prefix="/api/sync", tags=["sync"])
-app.include_router(geo_routes.router, prefix="/api/geo", tags=["geo"])
-app.include_router(audit_routes.router, prefix="/api/audit", tags=["audit"])
+app.include_router(auth_routes.router, prefix="/auth")
+app.include_router(admin_routes.router, prefix="/admin")
+app.include_router(upload_routes.router, prefix="/upload")
+app.include_router(export_routes.router, prefix="/export")
+app.include_router(statistics_routes.router, prefix="/statistics")
+app.include_router(search_routes.router, prefix="")  # search/nid at root /search, /nid
+app.include_router(batch_routes.router, prefix="/batches")
+app.include_router(task_routes.router, prefix="/tasks", tags=["tasks"])
+app.include_router(sync_routes.router, prefix="/sync", tags=["sync"])
+app.include_router(geo_routes.router, prefix="/geo", tags=["geo"])
+app.include_router(audit_routes.router, prefix="/audit", tags=["audit"])
 
 
 # ─────────────────────────────────────────────────────────────────────────────

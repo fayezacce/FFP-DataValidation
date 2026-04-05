@@ -43,7 +43,7 @@ async def ibas_verify_nid(
     return {"found": exists}
 
 
-@router.get("/sync/export")
+@router.get("/export")
 async def sync_export(
     since: datetime = None,
     db: Session = Depends(get_db),
@@ -98,7 +98,7 @@ class SyncImportPayload(BaseModel):
     records: list = []
 
 
-@router.post("/sync/import")
+@router.post("/import")
 async def sync_import(
     payload: SyncImportPayload,
     db: Session = Depends(get_db),

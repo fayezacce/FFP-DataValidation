@@ -57,6 +57,10 @@ export default function StatisticsPage() {
   const [recheckLoading, setRecheckLoading] = React.useState<string | null>(null);
   const [recheckResult, setRecheckResult] = React.useState<{ msg: string; flagged: number } | null>(null);
 
+  // Multi-selection state
+  const [selectedDivisions, setSelectedDivisions] = React.useState<Set<string>>(new Set());
+  const [selectedDistricts, setSelectedDistricts] = React.useState<Set<string>>(new Set());
+
   const fetchStats = async () => {
     setLoading(true);
     setError(null);
@@ -70,6 +74,14 @@ export default function StatisticsPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleDownloadAllChecked = async () => {
+    try {
+      const res = await fetchWithAuth("/api/export/zip-checked", { method: "POST" });
+      if (res.ok) alert("All Checked zip task started! Check the Task Tray in the bottom right corner.");
+      else alert("Failed to start checked zip task");
+    } catch(e) { console.error(e); }
   };
 
   const handleDownloadAllValid = async () => {
@@ -86,6 +98,67 @@ export default function StatisticsPage() {
       if (res.ok) alert("Invalid records zip task started! Check the Task Tray in the bottom right corner.");
       else alert("Failed to start invalid records zip task");
     } catch(e) { console.error(e); }
+  };
+
+  // ── Selection Handlers ──────────────────────────────────────────────────
+  const handleToggleDivision = (divName: string) => {
+    setSelectedDivisions(prev => {
+      const next = new Set(prev);
+      if (next.has(divName)) {
+        next.delete(divName);
+      } else {
+        next.add(divName);
+        // Remove individual district selections for this division (they're covered)
+        setSelectedDistricts(prev2 => {
+          const next2 = new Set(prev2);
+          next2.forEach(key => {
+            if (key.startsWith(divName + '|')) next2.delete(key);
+          });
+          return next2;
+        });
+      }
+      return next;
+    });
+  };
+
+  const handleToggleDistrict = (divName: string, distName: string) => {
+    const key = `${divName}|${distName}`;
+    // If division is already selected, toggling a district deselects it
+    if (selectedDivisions.has(divName)) {
+      return; // Division-level selection covers all districts
+    }
+    setSelectedDistricts(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const selectionCount = selectedDivisions.size + selectedDistricts.size;
+
+  const handleClearSelection = () => {
+    setSelectedDivisions(new Set());
+    setSelectedDistricts(new Set());
+  };
+
+  const handleDownloadSelected = async (mode: string) => {
+    const divisions = Array.from(selectedDivisions);
+    const districts = Array.from(selectedDistricts).map(k => k.split('|')[1]);
+
+    try {
+      const res = await fetchWithAuth('/api/export/zip-selected', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode, divisions, districts }),
+      });
+      if (res.ok) {
+        alert(`${mode.charAt(0).toUpperCase() + mode.slice(1)} export started for selected locations! Check the Task Tray.`);
+      } else {
+        const err = await res.json().catch(() => ({ detail: 'Unknown error' }));
+        alert('Failed: ' + (err.detail || 'Unknown error'));
+      }
+    } catch (e) { console.error(e); }
   };
 
   const buildLiveExportInvalidUrl = (entry: StatsEntry, fmt: string) => {
@@ -312,6 +385,48 @@ export default function StatisticsPage() {
             <Link href="/search" className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600/20 text-indigo-400 text-sm border border-indigo-500/30">
               <SearchIcon className="w-4 h-4" /> {t("search_records")}
             </Link>
+
+            {/* Bulk Export Dropdown */}
+            <div className="relative group z-50">
+              <button className="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-800/50 border border-slate-700/50 text-slate-300 text-sm hover:bg-slate-700 transition-all">
+                <Download className="w-4 h-4" /> Bulk Export
+              </button>
+              <div className="absolute right-0 mt-2 w-48 bg-[#1e2025] border border-[#2d2f34] shadow-2xl rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 transform origin-top-right scale-95 group-hover:scale-100 flex flex-col overflow-hidden">
+                <button onClick={handleDownloadAllChecked} className="flex items-center gap-2 px-4 py-3 text-sm text-cyan-400 hover:bg-[#2d2f34] border-b border-[#2d2f34] transition-colors text-left" title="Download all tested files + invalid PDFs">
+                  <Download className="w-4 h-4 shrink-0" /> All Checked
+                </button>
+                <button onClick={handleDownloadAllValid} className="flex items-center gap-2 px-4 py-3 text-sm text-emerald-400 hover:bg-[#2d2f34] border-b border-[#2d2f34] transition-colors text-left" title="Download all valid records">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" /> All Valid
+                </button>
+                <button onClick={handleDownloadAllInvalid} className="flex items-center gap-2 px-4 py-3 text-sm text-red-400 hover:bg-[#2d2f34] transition-colors text-left" title="Download all invalid records">
+                  <FileWarning className="w-4 h-4 shrink-0" /> All Invalid
+                </button>
+              </div>
+            </div>
+
+            {/* Download Selected Bar */}
+            {selectionCount > 0 && (
+              <div className="relative group z-50">
+                <button className="flex items-center gap-2 px-4 py-2 rounded-lg bg-cyan-600/30 border border-cyan-500/50 text-cyan-300 text-sm hover:bg-cyan-600/50 transition-all animate-pulse">
+                  <Download className="w-4 h-4" /> Download Selected ({selectionCount})
+                </button>
+                <div className="absolute right-0 mt-2 w-52 bg-[#1e2025] border border-[#2d2f34] shadow-2xl rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 transform origin-top-right scale-95 group-hover:scale-100 flex flex-col overflow-hidden">
+                  <button onClick={() => handleDownloadSelected('checked')} className="flex items-center gap-2 px-4 py-3 text-sm text-cyan-400 hover:bg-[#2d2f34] border-b border-[#2d2f34] transition-colors text-left">
+                    <Download className="w-4 h-4 shrink-0" /> Selected — Checked
+                  </button>
+                  <button onClick={() => handleDownloadSelected('valid')} className="flex items-center gap-2 px-4 py-3 text-sm text-emerald-400 hover:bg-[#2d2f34] border-b border-[#2d2f34] transition-colors text-left">
+                    <CheckCircle2 className="w-4 h-4 shrink-0" /> Selected — Valid
+                  </button>
+                  <button onClick={() => handleDownloadSelected('invalid')} className="flex items-center gap-2 px-4 py-3 text-sm text-red-400 hover:bg-[#2d2f34] border-b border-[#2d2f34] transition-colors text-left">
+                    <FileWarning className="w-4 h-4 shrink-0" /> Selected — Invalid
+                  </button>
+                  <button onClick={handleClearSelection} className="flex items-center gap-2 px-4 py-3 text-sm text-gray-400 hover:bg-[#2d2f34] transition-colors text-left">
+                    ✕ Clear Selection
+                  </button>
+                </div>
+              </div>
+            )}
+
             <button onClick={fetchStats} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm flex gap-2">
               <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} /> {t("refresh")}
             </button>
@@ -349,6 +464,10 @@ export default function StatisticsPage() {
             buildLiveExportUrl={buildLiveExportUrl}
             buildLiveExportInvalidUrl={buildLiveExportInvalidUrl}
             downloadFileWithAuth={downloadFileWithAuth}
+            selectedDivisions={selectedDivisions}
+            selectedDistricts={selectedDistricts}
+            onToggleDivision={handleToggleDivision}
+            onToggleDistrict={handleToggleDistrict}
           />
         )}
       </div>

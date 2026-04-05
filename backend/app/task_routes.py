@@ -12,6 +12,7 @@ import logging
 from .database import get_db
 from .models import User, BackgroundTask
 from .auth import get_current_user
+from .rbac import PermissionChecker
 
 logger = logging.getLogger("ffp")
 router = APIRouter(tags=["tasks"])
@@ -32,7 +33,7 @@ def _task_to_dict(t):
     }
 
 
-@router.get("/tasks/my-tasks")
+@router.get("/my-tasks", dependencies=[Depends(get_current_user)])
 def get_my_tasks(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     tasks = db.query(BackgroundTask).filter(
         BackgroundTask.user_id == current_user.id,
@@ -40,7 +41,7 @@ def get_my_tasks(db: Session = Depends(get_db), current_user: User = Depends(get
     return [_task_to_dict(t) for t in tasks]
 
 
-@router.get("/tasks/{task_id}")
+@router.get("/{task_id}", dependencies=[Depends(get_current_user)])
 def get_task_status(task_id: str, db: Session = Depends(get_db)):
     task = db.query(BackgroundTask).filter(BackgroundTask.id == task_id).first()
     if not task:
@@ -48,7 +49,7 @@ def get_task_status(task_id: str, db: Session = Depends(get_db)):
     return _task_to_dict(task)
 
 
-@router.delete("/tasks/cleanup")
+@router.delete("/cleanup", dependencies=[Depends(PermissionChecker("view_admin"))])
 def cleanup_tasks(db: Session = Depends(get_db)):
     tasks = db.query(BackgroundTask).filter(
         BackgroundTask.status.in_(["completed", "error"]),

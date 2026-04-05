@@ -7,6 +7,20 @@ import uuid
 import pandas as pd
 from fpdf import FPDF
 
+# Module-level font path cache — resolved once, used for all PDF calls
+_NIKOSH_FONT_PATH_CACHE = None
+
+def _get_nikosh_font_path():
+    """Return the cached path to Nikosh.ttf. Resolved once on first call."""
+    global _NIKOSH_FONT_PATH_CACHE
+    if _NIKOSH_FONT_PATH_CACHE is None:
+        candidate = os.path.join(os.path.dirname(__file__), "..", "Nikosh.ttf")
+        if os.path.exists(candidate):
+            _NIKOSH_FONT_PATH_CACHE = os.path.abspath(candidate)
+        else:
+            _NIKOSH_FONT_PATH_CACHE = ""  # Empty = not found
+    return _NIKOSH_FONT_PATH_CACHE or None
+
 class ReportPDF(FPDF):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -76,9 +90,9 @@ def generate_pdf_report(
     pdf = ReportPDF("L", "mm", "A4")  # Landscape
     pdf.report_title = title
 
-    # Register Nikosh Font (supports Bengali)
-    font_path = os.path.join(os.path.dirname(__file__), "..", "Nikosh.ttf")
-    if os.path.exists(font_path):
+    # Register Nikosh Font (supports Bengali) — cached path for performance
+    font_path = _get_nikosh_font_path()
+    if font_path:
         pdf.add_font("Nikosh", "", font_path, uni=True)
     else:
         pdf.add_font("Nikosh", "", "C:\\Windows\\Fonts\\arial.ttf", uni=True)

@@ -22,8 +22,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "1.0"
-          memory: 512M
+          cpus: "2.0"
+          memory: 1G
 
   # ── Automated Daily DB Backup ──────────────────────────────────────────────
   db-backup:
@@ -85,8 +85,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "2.0"
-          memory: 1G
+          cpus: "3.0"
+          memory: 2G
 
   # ── Frontend ───────────────────────────────────────────────────────────────
   frontend:

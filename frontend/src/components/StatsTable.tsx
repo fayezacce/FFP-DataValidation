@@ -1,12 +1,12 @@
 /**
- * FFP Data Validation Platform - Hierarchical Statistics Table
+ * FFP Data Validation Platform - Hierarchical Statistics Table with Multi-Select
  */
 
 import React, { useState } from "react";
 import { 
   ChevronRight, ChevronDown, MapPin, Hash, CheckCircle2, FileWarning, 
   Clock, FileSpreadsheet, FileText, Printer, Search as SearchIcon, 
-  Edit2, Trash2, RefreshCw, BarChart3, Download
+  Edit2, Trash2, RefreshCw, BarChart3, Download, Square, CheckSquare, MinusSquare
 } from "lucide-react";
 import { StatsEntry } from "@/types/ffp";
 
@@ -22,6 +22,10 @@ interface StatsTableProps {
   buildLiveExportUrl: (entry: StatsEntry, fmt: string) => string;
   buildLiveExportInvalidUrl: (entry: StatsEntry, fmt: string) => string;
   downloadFileWithAuth: (url: string, filename: string) => void;
+  selectedDivisions: Set<string>;
+  selectedDistricts: Set<string>;
+  onToggleDivision: (divName: string) => void;
+  onToggleDistrict: (divName: string, distName: string) => void;
 }
 
 const StatsTable: React.FC<StatsTableProps> = ({
@@ -35,7 +39,11 @@ const StatsTable: React.FC<StatsTableProps> = ({
   recheckResult,
   buildLiveExportUrl,
   buildLiveExportInvalidUrl,
-  downloadFileWithAuth
+  downloadFileWithAuth,
+  selectedDivisions,
+  selectedDistricts,
+  onToggleDivision,
+  onToggleDistrict,
 }) => {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
@@ -57,13 +65,29 @@ const StatsTable: React.FC<StatsTableProps> = ({
     return "text-red-400";
   };
 
+  // Check if a division is fully selected (all its districts selected)
+  const isDivFullySelected = (divNode: any) => {
+    return selectedDivisions.has(divNode.name);
+  };
+
+  // Check if a division is partially selected (some districts selected)
+  const isDivPartiallySelected = (divNode: any) => {
+    if (selectedDivisions.has(divNode.name)) return false;
+    return Object.values(divNode.districts).some((d: any) => selectedDistricts.has(`${divNode.name}|${d.name}`));
+  };
+
+  const isDistSelected = (divName: string, distName: string) => {
+    return selectedDivisions.has(divName) || selectedDistricts.has(`${divName}|${distName}`);
+  };
+
   return (
     <div className="bg-[#121214] border border-[#1e1e20] rounded-2xl overflow-hidden shadow-2xl">
       <div className="overflow-x-auto custom-scrollbar">
         <table className="w-full text-left border-collapse min-w-[1000px]">
           <thead>
             <tr className="bg-[#1a1a1c] text-gray-500 text-[10px] uppercase font-black tracking-widest border-b border-[#2a2a2e]">
-              <th className="px-6 py-4 w-12"></th>
+              <th className="px-3 py-4 w-10"></th>
+              <th className="px-2 py-4 w-10"></th>
               <th className="px-6 py-4 min-w-[200px]">Location (Division / District / Upazila)</th>
               <th className="px-6 py-4 text-center">Total (Unique)</th>
               <th className="px-6 py-4 text-center">Validated</th>
@@ -76,14 +100,29 @@ const StatsTable: React.FC<StatsTableProps> = ({
             {hierarchy.map((divNode: any) => (
               <React.Fragment key={divNode.name}>
                 {/* Division Row */}
-                <tr 
-                  className="bg-[#0f0f11] hover:bg-[#161618] cursor-pointer transition-colors group"
-                  onClick={() => toggleExpand(divNode.name)}
-                >
-                  <td className="px-6 py-4 text-center">
+                <tr className="bg-[#0f0f11] hover:bg-[#161618] transition-colors group">
+                  <td className="px-3 py-4 text-center">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onToggleDivision(divNode.name); }}
+                      className="p-0.5 rounded hover:bg-white/10 transition-colors"
+                      title={`Select all in ${divNode.name}`}
+                    >
+                      {isDivFullySelected(divNode) ? (
+                        <CheckSquare className="w-4 h-4 text-emerald-500" />
+                      ) : isDivPartiallySelected(divNode) ? (
+                        <MinusSquare className="w-4 h-4 text-amber-500" />
+                      ) : (
+                        <Square className="w-4 h-4 text-gray-600 hover:text-gray-400" />
+                      )}
+                    </button>
+                  </td>
+                  <td 
+                    className="px-2 py-4 text-center cursor-pointer"
+                    onClick={() => toggleExpand(divNode.name)}
+                  >
                     {expanded[divNode.name] ? <ChevronDown className="w-4 h-4 text-emerald-500" /> : <ChevronRight className="w-4 h-4 text-gray-600" />}
                   </td>
-                  <td className="px-6 py-4">
+                  <td className="px-6 py-4 cursor-pointer" onClick={() => toggleExpand(divNode.name)}>
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center">
                         <MapPin className="w-4 h-4 text-emerald-500" />
@@ -106,14 +145,27 @@ const StatsTable: React.FC<StatsTableProps> = ({
                 {expanded[divNode.name] && Object.values(divNode.districts).map((distNode: any) => (
                   <React.Fragment key={distNode.name}>
                     {/* District Row */}
-                    <tr 
-                      className="bg-[#141416] hover:bg-[#1c1c1e] cursor-pointer transition-colors group"
-                      onClick={() => toggleExpand(divNode.name + distNode.name)}
-                    >
-                      <td className="px-6 py-4 text-center pl-10">
+                    <tr className="bg-[#141416] hover:bg-[#1c1c1e] transition-colors group">
+                      <td className="px-3 py-4 text-center pl-8">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onToggleDistrict(divNode.name, distNode.name); }}
+                          className="p-0.5 rounded hover:bg-white/10 transition-colors"
+                          title={`Select all in ${distNode.name}`}
+                        >
+                          {isDistSelected(divNode.name, distNode.name) ? (
+                            <CheckSquare className="w-3.5 h-3.5 text-blue-500" />
+                          ) : (
+                            <Square className="w-3.5 h-3.5 text-gray-600 hover:text-gray-400" />
+                          )}
+                        </button>
+                      </td>
+                      <td 
+                        className="px-2 py-4 text-center pl-8 cursor-pointer"
+                        onClick={() => toggleExpand(divNode.name + distNode.name)}
+                      >
                         {expanded[divNode.name + distNode.name] ? <ChevronDown className="w-3 h-3 text-blue-500" /> : <ChevronRight className="w-3 h-3 text-gray-700" />}
                       </td>
-                      <td className="px-6 py-4 pl-12">
+                      <td className="px-6 py-4 pl-12 cursor-pointer" onClick={() => toggleExpand(divNode.name + distNode.name)}>
                         <div className="flex items-center gap-3">
                           <div className="w-6 h-6 rounded-md bg-blue-500/10 flex items-center justify-center">
                             <MapPin className="w-3 h-3 text-blue-500" />
@@ -132,7 +184,8 @@ const StatsTable: React.FC<StatsTableProps> = ({
 
                     {expanded[divNode.name + distNode.name] && distNode.upazilas.map((upz: StatsEntry) => (
                       <tr key={upz.id} className="bg-[#121214] hover:bg-emerald-500/[0.02] transition-colors group/row">
-                        <td className="px-6 py-4"></td>
+                        <td className="px-3 py-4"></td>
+                        <td className="px-2 py-4"></td>
                         <td className="px-6 py-4 pl-20 min-w-[300px]">
                           <div className="flex flex-col">
                             <div className="flex items-center gap-2 mb-1">
@@ -183,7 +236,6 @@ const StatsTable: React.FC<StatsTableProps> = ({
                         </td>
                         <td className="px-6 py-4">
                           <div className="flex items-center justify-center gap-1.5 opacity-40 group-hover/row:opacity-100 transition-all duration-300">
-                            {/* Live Export Dropdown Placeholder - Simplified for modular component */}
                             <button 
                               onClick={() => downloadFileWithAuth(buildLiveExportUrl(upz, "xlsx"), `${upz.district}_${upz.upazila}_Live.xlsx`)}
                               className="p-2 rounded-lg bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500 hover:text-white transition-all"
