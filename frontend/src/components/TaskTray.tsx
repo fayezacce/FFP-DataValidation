@@ -86,13 +86,23 @@ export default function TaskTray() {
                   <span className="text-xs font-medium text-[#f8f9fa] capitalize">
                     {task.task_name.replace(/_/g, " ")}
                   </span>
-                  {task.status === "running" || task.status === "pending" ? (
-                    <Loader2 size={14} className="animate-spin text-blue-400" />
-                  ) : task.status === "completed" ? (
-                    <CheckCircle2 size={14} className="text-green-500" />
-                  ) : (
-                    <XCircle size={14} className="text-red-500" />
-                  )}
+                  <div className="flex items-center gap-2">
+                    {(task.status === "running" || task.status === "pending") && (
+                      <button 
+                        onClick={() => handleCancel(task.id)}
+                        className="text-[#a0a3ab] hover:text-red-400 transition-colors"
+                      >
+                        <X size={14} />
+                      </button>
+                    )}
+                    {task.status === "running" || task.status === "pending" ? (
+                      <Loader2 size={14} className="animate-spin text-blue-400" />
+                    ) : task.status === "completed" ? (
+                      <CheckCircle2 size={14} className="text-green-500" />
+                    ) : (
+                      <XCircle size={14} className="text-red-500" />
+                    )}
+                  </div>
                 </div>
                 
                 <p className="text-[11px] text-[#a0a3ab] mb-2 line-clamp-2">

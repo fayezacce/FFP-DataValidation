@@ -145,9 +145,12 @@ async def validate_excel(
                 df = pd.read_excel(io.BytesIO(contents), sheet_name=sheet_name.strip(), header=header_row - 1, dtype=str)
             else:
                 df = pd.read_excel(io.BytesIO(contents), header=header_row - 1, dtype=str)
-            return process_dataframe(df, dob_col=dob_column, nid_col=nid_column, header_row=header_row, tz_limit=tz_limit, tz_whitelist=tz_whitelist)
+            # Capture original headers BEFORE process_dataframe renames them via header_mapping
+            original_headers = [str(c) for c in df.columns.tolist()]
+            processed, s = process_dataframe(df, dob_col=dob_column, nid_col=nid_column, header_row=header_row, tz_limit=tz_limit, tz_whitelist=tz_whitelist)
+            return processed, s, original_headers
 
-        processed_df, stats = await asyncio.to_thread(read_and_process)
+        processed_df, stats, original_headers = await asyncio.to_thread(read_and_process)
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
     except KeyError as ke:
@@ -304,6 +307,21 @@ async def validate_excel(
     error_count = int((processed_df["Status"] == "error").sum())
     valid_count = stats["total_rows"] - error_count
 
+    # ── Map Geo Names to IDs ──
+    from sqlalchemy import func
+    from .models import Division, District, Upazila
+
+    div_obj = db.query(Division).filter(func.lower(Division.name) == geo["division"].lower().strip()).first()
+    dist_obj = db.query(District).filter(func.lower(District.name) == geo["district"].lower().strip()).first()
+    upz_obj = db.query(Upazila).filter(
+        func.lower(Upazila.name) == geo["upazila"].lower().strip(),
+        func.lower(Upazila.district_name) == geo["district"].lower().strip()
+    ).first()
+
+    div_id = div_obj.id if div_obj else None
+    dist_id = dist_obj.id if dist_obj else None
+    upazila_id = upz_obj.id if upz_obj else None
+
     # ── Database Persistence (NID-Aware Upsert) ──
     batch = UploadBatch(
         filename=file.filename,
@@ -313,10 +331,14 @@ async def validate_excel(
         division=geo["division"],
         district=geo["district"],
         upazila=geo["upazila"],
+        division_id=div_id,
+        district_id=dist_id,
+        upazila_id=upazila_id,
         total_rows=stats["total_rows"],
         valid_count=valid_count,
         invalid_count=error_count,
         status="completed",
+        column_headers=original_headers,  # Store original Bangla headers
     )
     db.add(batch)
     db.commit()
@@ -381,7 +403,11 @@ async def validate_excel(
             "division": geo["division"],
             "district": geo["district"],
             "upazila": geo["upazila"],
+            "division_id": div_id,
+            "district_id": dist_id,
+            "upazila_id": upazila_id,
             "card_no": row.get("Card_No", ""),
+            "mobile": str(row.get("Mobile", "")).strip() if pd.notna(row.get("Mobile")) else "",
             "source_file": file.filename,
             "batch_id": batch.id,
             "upload_batch": current_version,
@@ -401,7 +427,11 @@ async def validate_excel(
                     "division": stmt.excluded.division,
                     "district": stmt.excluded.district,
                     "upazila": stmt.excluded.upazila,
+                    "division_id": stmt.excluded.division_id,
+                    "district_id": stmt.excluded.district_id,
+                    "upazila_id": stmt.excluded.upazila_id,
                     "card_no": stmt.excluded.card_no,
+                    "mobile": stmt.excluded.mobile,
                     "source_file": stmt.excluded.source_file,
                     "batch_id": stmt.excluded.batch_id,
                     "upload_batch": stmt.excluded.upload_batch,
@@ -435,6 +465,9 @@ async def validate_excel(
             "division": geo["division"],
             "district": geo["district"],
             "upazila": geo["upazila"],
+            "division_id": div_id,
+            "district_id": dist_id,
+            "upazila_id": upazila_id,
             "card_no": row.get("Card_No", ""),
             "master_serial": row.get("Master_Serial", ""),
             "mobile": row.get("Mobile", ""),
@@ -499,6 +532,7 @@ async def validate_excel(
             "updated_count": updated_count,
         },
         current_version=current_version,
+        column_headers=original_headers,  # Persist original Bangla column headers
     )
 
     summary.pdf_url = f"/api/export/download/{urllib.parse.quote(filename)}"

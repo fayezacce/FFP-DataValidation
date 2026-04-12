@@ -567,31 +567,39 @@ def run_cleanup_background(db_session_factory, task_id: str, user_id: int, usern
         for idx, tbl in enumerate(tables):
             task.progress = 50 + int((idx / 4) * 50)
             db.commit()
-            # Match by Upazila + District (most precise)
-            sql = f"""
+            # 1. Match by Upazila + District (most precise)
+            sql_upz = f"""
                 UPDATE {tbl} t
-                SET upazila_id = u.id,
-                    district_id = u.district_id,
-                    division_id = u.division_id
+                SET upazila_id = u.id
                 FROM upazilas u
                 WHERE lower(t.upazila) = lower(u.name)
                   AND lower(t.district) = lower(u.district_name)
                   AND t.upazila_id IS NULL
             """
-            res = db.execute(_text(sql))
+            res = db.execute(_text(sql_upz))
             backfilled += res.rowcount
             db.commit()
             
-            # Match by District (if upazila still null)
+            # 2. Match by District
             sql_dist = f"""
                 UPDATE {tbl} t
-                SET district_id = d.id,
-                    division_id = d.division_id
+                SET district_id = d.id
                 FROM districts d
                 WHERE lower(t.district) = lower(d.name)
                   AND t.district_id IS NULL
             """
             db.execute(_text(sql_dist))
+            db.commit()
+            
+            # 3. Match by Division
+            sql_div = f"""
+                UPDATE {tbl} t
+                SET division_id = dv.id
+                FROM divisions dv
+                WHERE lower(t.division) = lower(dv.name)
+                  AND t.division_id IS NULL
+            """
+            db.execute(_text(sql_div))
             db.commit()
 
         task.status = "completed"
@@ -670,127 +678,86 @@ def delete_unresolved(db: Session = Depends(get_db), current_user: User = Depend
     report = {"deleted": {}, "errors": []}
     total_deleted = 0
 
-    # 2. Find all unresolvable geo groups across data tables
-    def get_unresolved_groups(model):
-        groups = (
-            db.query(model.division, model.district, model.upazila)
-            .group_by(model.division, model.district, model.upazila)
-            .all()
-        )
-        return [
-            (div_n, dist_n, upz_n) for div_n, dist_n, upz_n in groups
-            if ((dist_n or "").lower().strip(), (upz_n or "").lower().strip()) not in canonical_keys
-        ]
-
-    # 3. Delete from valid_records
-    unresolved_valid = get_unresolved_groups(ValidRecord)
-    deleted_valid = 0
-    for div_n, dist_n, upz_n in unresolved_valid:
-        try:
-            cnt = db.query(ValidRecord).filter(
-                ValidRecord.division == div_n,
-                ValidRecord.district == dist_n,
-                ValidRecord.upazila == upz_n,
-            ).delete(synchronize_session=False)
-            deleted_valid += cnt
-            db.commit()
-        except Exception as e:
-            db.rollback()
-            report["errors"].append(f"valid_records delete error ({div_n}/{dist_n}/{upz_n}): {str(e)}")
-    report["deleted"]["valid_records"] = deleted_valid
-    total_deleted += deleted_valid
-
-    # 4. Delete from invalid_records
-    unresolved_invalid = get_unresolved_groups(InvalidRecord)
-    deleted_invalid = 0
-    for div_n, dist_n, upz_n in unresolved_invalid:
-        try:
-            cnt = db.query(InvalidRecord).filter(
-                InvalidRecord.division == div_n,
-                InvalidRecord.district == dist_n,
-                InvalidRecord.upazila == upz_n,
-            ).delete(synchronize_session=False)
-            deleted_invalid += cnt
-            db.commit()
-        except Exception as e:
-            db.rollback()
-            report["errors"].append(f"invalid_records delete error ({div_n}/{dist_n}/{upz_n}): {str(e)}")
-    report["deleted"]["invalid_records"] = deleted_invalid
-    total_deleted += deleted_invalid
-
-    # 5. Delete summary_stats rows for unresolvable upazilas
-    unresolved_stats = get_unresolved_groups(SummaryStats)
-    deleted_stats = 0
-    for div_n, dist_n, upz_n in unresolved_stats:
-        try:
-            cnt = db.query(SummaryStats).filter(
-                SummaryStats.division == div_n,
-                SummaryStats.district == dist_n,
-                SummaryStats.upazila == upz_n,
-            ).delete(synchronize_session=False)
-            deleted_stats += cnt
-            db.commit()
-        except Exception as e:
-            db.rollback()
-            report["errors"].append(f"summary_stats delete error ({div_n}/{dist_n}/{upz_n}): {str(e)}")
-    report["deleted"]["summary_stats"] = deleted_stats
-
-    # 6. Mark upload_batches as 'deleted' for unresolvable upazilas
-    unresolved_batches = get_unresolved_groups(UploadBatch)
-    marked_batches = 0
-    for div_n, dist_n, upz_n in unresolved_batches:
-        try:
-            cnt = db.query(UploadBatch).filter(
-                UploadBatch.division == div_n,
-                UploadBatch.district == dist_n,
-                UploadBatch.upazila == upz_n,
-                UploadBatch.status != "deleted",
-            ).update({"status": "deleted"}, synchronize_session=False)
-            marked_batches += cnt
-            db.commit()
-        except Exception as e:
-            db.rollback()
-            report["errors"].append(f"upload_batches update error ({div_n}/{dist_n}/{upz_n}): {str(e)}")
-    report["deleted"]["upload_batches_marked"] = marked_batches
-
-    # 7. Recalculate SummaryStats from live record counts for ALL remaining upazilas
-    #    so the totals are always consistent with the actual data.
-    recalc_count = 0
+    # 1. Set-based deletion for data tables
     try:
-        remaining_stats = db.query(SummaryStats).all()
-        for stat in remaining_stats:
-            live_valid = db.query(func.count(ValidRecord.id)).filter(
-                ValidRecord.district == stat.district,
-                ValidRecord.upazila  == stat.upazila,
-            ).scalar() or 0
-            live_invalid = db.query(func.count(InvalidRecord.id)).filter(
-                InvalidRecord.district == stat.district,
-                InvalidRecord.upazila  == stat.upazila,
-            ).scalar() or 0
-            stat.valid   = live_valid
-            stat.invalid = live_invalid
-            stat.total   = live_valid + live_invalid
-            recalc_count += 1
+        targets = ["valid_records", "invalid_records", "summary_stats"]
+        report["deleted"] = {}
+
+        for table in targets:
+            delete_sql = f"""
+                DELETE FROM {table} t
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM upazilas u
+                    WHERE LOWER(TRIM(u.district_name)) = LOWER(TRIM(t.district))
+                      AND LOWER(TRIM(u.name)) = LOWER(TRIM(t.upazila))
+                )
+            """
+            result = db.execute(text(delete_sql))
+            report["deleted"][table] = result.rowcount
+            total_deleted += result.rowcount
+
+        # 2. Set-based status update for upload_batches
+        batch_update_sql = """
+            UPDATE upload_batches b
+            SET status = 'deleted'
+            WHERE status != 'deleted'
+              AND NOT EXISTS (
+                SELECT 1 FROM upazilas u
+                WHERE LOWER(TRIM(u.district_name)) = LOWER(TRIM(b.district))
+                  AND LOWER(TRIM(u.name)) = LOWER(TRIM(b.upazila))
+            )
+        """
+        batch_result = db.execute(text(batch_update_sql))
+        report["deleted"]["upload_batches_marked"] = batch_result.rowcount
+
         db.commit()
     except Exception as e:
         db.rollback()
-        report["errors"].append(f"Recalculation error: {str(e)}")
-    report["recalculated_stats_rows"] = recalc_count
+        report["errors"].append(f"Set-based cleanup failure: {str(e)}")
+        return report
+
+    # 3. Recalculate SummaryStats for consistency using Set-Based SQL
+    try:
+        recalculate_sql = """
+            WITH counts AS (
+                SELECT 
+                    division, district, upazila,
+                    SUM(valid_cnt) as live_valid,
+                    SUM(invalid_cnt) as live_invalid
+                FROM (
+                    SELECT division, district, upazila, COUNT(*) as valid_cnt, 0 as invalid_cnt 
+                    FROM valid_records GROUP BY division, district, upazila
+                    UNION ALL
+                    SELECT division, district, upazila, 0 as valid_cnt, COUNT(*) as invalid_cnt 
+                    FROM invalid_records GROUP BY division, district, upazila
+                ) combined
+                GROUP BY division, district, upazila
+            )
+            UPDATE summary_stats s
+            SET valid = c.live_valid,
+                invalid = c.live_invalid,
+                total = c.live_valid + c.live_invalid,
+                updated_at = NOW()
+            FROM counts c
+            WHERE s.division = c.division 
+              AND s.district = c.district 
+              AND s.upazila = c.upazila
+        """
+        db.execute(text(recalculate_sql))
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        report["errors"].append(f"Set-based recalculation failure: {str(e)}")
 
     log_audit(db, current_user, "DELETE", "system", 0, new_data={
         "action": "delete_unresolved_geo",
-        "deleted_valid": deleted_valid,
-        "deleted_invalid": deleted_invalid,
-        "deleted_stats": deleted_stats,
-        "recalculated": recalc_count,
+        "total_deleted": total_deleted,
+        "report": report
     })
 
     return {
         "success": len(report["errors"]) == 0,
         "total_records_deleted": total_deleted,
-        "summary_stats_rows_deleted": deleted_stats,
-        "upload_batches_marked_deleted": marked_batches,
-        "stats_recalculated": recalc_count,
         "report": report,
     }
 

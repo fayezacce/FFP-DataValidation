@@ -46,6 +46,10 @@ class ReportPDF(FPDF):
         self.cell(0, 10, f"Page {self.page_no()}  |  Computer Network Unit, Directorate General of Food", align='C')
 
 
+# Performance threshold: Reports larger than this will only contain the summary
+# to prevent memory exhaustion and hangs during national-scale exports.
+SUMMARY_THRESHOLD = 10000
+
 def generate_pdf_report(
     df: pd.DataFrame,
     stats: dict,
@@ -58,12 +62,7 @@ def generate_pdf_report(
     issues_label: str = "Invalid Rows",
     status_filter: str = "error",
 ) -> str:
-    """Generate a PDF validation report.
-
-    Args:
-        invalid_only: When True, only error rows are included and the filename/title
-                      reflect an "invalid records" report.
-    """
+    """Generate a PDF validation report with automatic large-dataset protection."""
     if additional_columns is None:
         additional_columns = []
     if geo is None:
@@ -90,11 +89,12 @@ def generate_pdf_report(
     pdf = ReportPDF("L", "mm", "A4")  # Landscape
     pdf.report_title = title
 
-    # Register Nikosh Font (supports Bengali) — cached path for performance
+    # Register Nikosh Font (supports Bengali)
     font_path = _get_nikosh_font_path()
     if font_path:
         pdf.add_font("Nikosh", "", font_path, uni=True)
     else:
+        # Fallback for local development environments
         pdf.add_font("Nikosh", "", "C:\\Windows\\Fonts\\arial.ttf", uni=True)
 
     if hasattr(pdf, "set_text_shaping"):
@@ -124,6 +124,19 @@ def generate_pdf_report(
 
     pdf.ln(10)
 
+    # ── Protection Logic for Large Datasets ────────────────────────────────────
+    row_count = len(df)
+    if row_count > SUMMARY_THRESHOLD:
+        pdf.set_font("Nikosh", "", 12)
+        pdf.set_text_color(200, 0, 0)
+        warning_msg = f"NOTE: This report contains {row_count} records. Detail rows are omitted to ensure system stability."
+        pdf.cell(0, 10, warning_msg, new_x="LMARGIN", new_y="NEXT")
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_font("Nikosh", "", 11)
+        pdf.cell(0, 10, "Please use the exported Excel/CSV file for full record details.", new_x="LMARGIN", new_y="NEXT")
+        pdf.output(filepath)
+        return filepath
+
     # ── Empty state ────────────────────────────────────────────────────────────
     if df.empty:
         pdf.set_font("Nikosh", "", 12)
@@ -131,32 +144,48 @@ def generate_pdf_report(
         pdf.output(filepath)
         return filepath
 
-    # ── Table ──────────────────────────────────────────────────────────────────
+    # ── Table (Only for manageable sizes) ──────────────────────────────────────
     pdf.set_font("Nikosh", "", 9)
 
-    show_cols = ["Excel_Row", "Cleaned_DOB", "Cleaned_NID", "Status", "Message"]
+    # Fixed 5-column layout — full usable width on A4 Landscape (277mm)
+    # No extra columns appended regardless of additional_columns argument
+    show_cols = []
+    col_labels = []
+    col_widths = []
+
+    # Map available column names (data may store DOB/NID with different aliases)
+    dob_col  = next((c for c in ["DOB", "Cleaned_DOB"] if c in df.columns), None)
+    nid_col  = next((c for c in ["NID", "Cleaned_NID"] if c in df.columns), None)
+    row_col  = "Excel_Row" if "Excel_Row" in df.columns else None
+    stat_col = "Status" if "Status" in df.columns else None
+    msg_col  = "Message" if "Message" in df.columns else None
+
+    # Build column list in fixed order: Row | DOB | NID | Status | Message
+    if row_col:  show_cols.append(row_col);  col_labels.append("Row")
+    if dob_col:  show_cols.append(dob_col);  col_labels.append("DOB")
+    if nid_col:  show_cols.append(nid_col);  col_labels.append("NID")
+    if stat_col: show_cols.append(stat_col); col_labels.append("Status")
+    if msg_col:  show_cols.append(msg_col);  col_labels.append("Message")
+
+    # Raw proportional widths (will be scaled to exactly fill 277mm)
+    raw_widths_map = {"Row": 12, "DOB": 28, "NID": 42, "Status": 22, "Message": 173}
+    raw_widths = [raw_widths_map.get(lbl, 30) for lbl in col_labels]
     total_usable_width = 277
+    scale = total_usable_width / sum(raw_widths)
+    col_widths = [w * scale for w in raw_widths]
 
-    valid_additional = [c for c in additional_columns if c in df.columns and c not in show_cols]
-    show_cols.extend(valid_additional)
-
-    core_widths = [15, 25, 35, 20, 60]
-    col_widths = list(core_widths)
-
-    if valid_additional:
-        extra_width_per_col = max(15, min(40, 117 // len(valid_additional)))
-        col_widths.extend([extra_width_per_col] * len(valid_additional))
-
-    total_w = sum(col_widths)
-    scale = total_usable_width / total_w
-    col_widths = [w * scale for w in col_widths]
+    # Sort by NID so duplicate NIDs appear consecutively in the list
+    sort_col = nid_col or dob_col
+    if sort_col and sort_col in df.columns:
+        df = df.sort_values(by=sort_col, kind="mergesort", na_position="last").reset_index(drop=True)
 
     pdf.show_cols = show_cols
     pdf.col_widths = col_widths
 
     def get_display_name(c):
-        if c == "Cleaned_DOB": return "DOB"
-        if c == "Cleaned_NID": return "NID"
+        if c in ("Cleaned_DOB", "DOB"): return "DOB"
+        if c in ("Cleaned_NID", "NID"): return "NID"
+        if c == "Excel_Row": return "Row"
         return str(c)
 
     def print_headers():
@@ -170,7 +199,7 @@ def generate_pdf_report(
     pdf.set_font("Nikosh", "", 9)
 
     for _, row in df.iterrows():
-        status = row.get("Status", "")
+        status = str(row.get("Status", ""))
 
         if status == "error":
             pdf.set_fill_color(255, 200, 200)
@@ -180,9 +209,10 @@ def generate_pdf_report(
             pdf.set_fill_color(255, 255, 255)
 
         for col, width in zip(show_cols, col_widths):
-            val = str(row.get(col, ""))
-            if len(val) > int(width):
-                val = val[: int(width) - 1] + ".."
+            val = str(row.get(col, "") or "")
+            max_chars = max(int(width * 1.6), 10)  # Approximate chars that fit
+            if len(val) > max_chars:
+                val = val[:max_chars - 2] + ".."
             pdf.cell(width, 8, val, border=1, align="L", fill=True)
         pdf.ln()
 

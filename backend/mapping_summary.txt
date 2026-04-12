@@ -1,0 +1,63 @@
+--- MAPPING SUMMARY ---
+spouse_nid: 22 variants
+spouse_dob: 21 variants
+spouse_name: 38 variants
+dealer_nid: 29 variants
+dealer_mobile: 34 variants
+dealer_name: 84 variants
+master_serial: 1 variants
+card_no: 19 variants
+father_husband_name: 7 variants
+name_en: 81 variants
+name_bn: 62 variants
+dob: 65 variants
+occupation: 1 variants
+address: 3 variants
+ward: 6 variants
+union_name: 2 variants
+nid_number: 68 variants
+mobile: 27 variants
+religion: 5 variants
+gender: 2 variants
+UNMAPPED: 39 variants
+
+--- UNMAPPED VARIANTS ---
+স্বামী /স্ত্রীর নাম
+স্মামী/স্ত্রী নাম
+জাতয়ি পরিচয় পত্র নং
+স্বামী/ন্ত্রীর নাম
+3
+উপকারভোগীর নাম
+এন আইডি নাম্বার
+স্বামী.স্ত্রীর নাম
+মোবাইল নম্বর (নিজ নামে)
+উপকার ভোগীর নাম (বাংলা)
+ইউনিয়ানের নাম
+এন.আই.ডি নং
+Column2
+জাতিয় পরিচয় পত্র নম্বর
+স্বামি/স্ত্রী নাম
+ভোক্তার ধরন
+মোবাইল নম্বর
+নমিনীর নাম
+`1\+C1`12rtym
+ইউপির নাম
+wj½
+ভোক্তার ধরন (নতুন = N, পরিবর্তন =R)
+ভোক্তার ধরণ
+স্বামিও/স্ত্রী
+উপভোগকারীর নাম
+স্বামী/ স্ত্রী নাম
+জাতিয় পরিচয় পত্র নং
+ু
+লিংঙ্গ
+স্বামী/স্ত্রীর জাতয়ি পরিচয় পত্র নং
+নাম
+ভোক্তার ধরণ (নতুন N ও পরিবর্তন- R
+স্বামী/স্থীর নাম
+মন্তব্য
+Column1
+জাতীয় পরিচয় পত্র নম্বর
+ag©
+উপকারভোগীর নাম (বাংলা)
+দোড়া

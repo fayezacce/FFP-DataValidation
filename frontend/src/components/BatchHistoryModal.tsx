@@ -5,6 +5,7 @@
 import React from "react";
 import { X, Clock, FileSpreadsheet, CheckCircle2, FileWarning, Hash, RefreshCw, Trash2, Download, FileText } from "lucide-react";
 import { StatsEntry, Batch } from "@/types/ffp";
+import { downloadFileWithAuth } from "@/lib/auth";
 
 interface BatchHistoryModalProps {
   entry: StatsEntry | null;
@@ -29,6 +30,12 @@ const BatchHistoryModal: React.FC<BatchHistoryModalProps> = ({
     return new Date(iso).toLocaleString('en-GB', { 
       day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' 
     });
+  };
+
+  const handleDownload = (url: string | undefined, defaultFilename: string) => {
+    if (!url) return;
+    const filename = url.split('/').pop() || defaultFilename;
+    downloadFileWithAuth(url, filename);
   };
 
   return (
@@ -119,19 +126,28 @@ const BatchHistoryModal: React.FC<BatchHistoryModalProps> = ({
                   {batch.status !== 'deleted' && (
                     <div className="mt-4 pt-4 border-t border-white/5 flex flex-wrap gap-2">
                        {batch.valid_url && (
-                        <a href={batch.valid_url} className="px-3 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-500 text-[10px] font-bold hover:bg-emerald-500 hover:text-white transition-all flex items-center gap-1.5">
+                        <button 
+                          onClick={() => handleDownload(batch.valid_url, "valid.xlsx")}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-500 text-[10px] font-bold hover:bg-emerald-500 hover:text-white transition-all flex items-center gap-1.5"
+                        >
                           <Download className="w-3 h-3" /> Valid.xlsx
-                        </a>
+                        </button>
                       )}
                       {batch.invalid_url && (
-                        <a href={batch.invalid_url} className="px-3 py-1.5 rounded-lg bg-red-500/10 text-red-500 text-[10px] font-bold hover:bg-red-500 hover:text-white transition-all flex items-center gap-1.5">
+                        <button 
+                          onClick={() => handleDownload(batch.invalid_url, "invalid.xlsx")}
+                          className="px-3 py-1.5 rounded-lg bg-red-500/10 text-red-500 text-[10px] font-bold hover:bg-red-500 hover:text-white transition-all flex items-center gap-1.5"
+                        >
                           <Download className="w-3 h-3" /> Invalid.xlsx
-                        </a>
+                        </button>
                       )}
                       {batch.pdf_url && (
-                        <a href={batch.pdf_url} className="px-3 py-1.5 rounded-lg bg-blue-500/10 text-blue-500 text-[10px] font-bold hover:bg-blue-500 hover:text-white transition-all flex items-center gap-1.5">
+                        <button 
+                          onClick={() => handleDownload(batch.pdf_url, "report.pdf")}
+                          className="px-3 py-1.5 rounded-lg bg-blue-500/10 text-blue-500 text-[10px] font-bold hover:bg-blue-500 hover:text-white transition-all flex items-center gap-1.5"
+                        >
                           <FileText className="w-3 h-3" /> Valid_Report.pdf
-                        </a>
+                        </button>
                       )}
                     </div>
                   )}

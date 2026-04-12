@@ -9,6 +9,18 @@ BENGALI_TO_ENGLISH = {
     '৫': '5', '৬': '6', '৭': '7', '৮': '8', '৯': '9'
 }
 
+import json
+import os
+
+# Load definitive header mapping from DB dump inside the local file
+HEADER_MAPPING = {}
+mapping_path = os.path.join(os.path.dirname(__file__), 'header_mapping.json')
+try:
+    with open(mapping_path, 'r', encoding='utf-8') as f:
+        HEADER_MAPPING = json.load(f)
+except Exception as e:
+    print(f"Warning: Failed to load HEADER_MAPPING: {e}")
+
 _BEN_TRANS = str.maketrans(BENGALI_TO_ENGLISH)
 
 def normalize_digits(text):
@@ -205,30 +217,28 @@ def resolve_column_name(target: str, available_cols: list) -> str:
 
 def process_dataframe(df: pd.DataFrame, dob_col: str, nid_col: str, header_row: int = 1, tz_limit: int = 0, tz_whitelist: set = None):
     """Processes DataFrame and adds cleaned cols, status, message, and Excel_Row."""
+    # NATIVE NORMALIZATION: Replace all columns with canonical mapped names where possible
+    new_cols = []
+    for c in df.columns:
+        c_clean = str(c).strip()
+        new_cols.append(HEADER_MAPPING.get(c_clean, c_clean))
+    df.columns = new_cols
+    
     results = df.copy()
     
-    # Resolve columns using fuzzy logic
-    actual_dob_col = resolve_column_name(dob_col, df.columns.tolist())
+    # Resolve columns using fuzzy logic, now checking the canonical names first
+    actual_dob_col = resolve_column_name("dob", df.columns.tolist()) or resolve_column_name(dob_col, df.columns.tolist())
     
     # Prioritize specific Bengali NID column name
-    actual_nid_col = resolve_column_name("জাতীয় পরিচয় পত্র নম্বর", df.columns.tolist())
-    if not actual_nid_col:
-        actual_nid_col = resolve_column_name(nid_col, df.columns.tolist())
+    actual_nid_col = resolve_column_name("nid_number", df.columns.tolist()) or resolve_column_name("জাতীয় পরিচয় পত্র নম্বর", df.columns.tolist()) or resolve_column_name(nid_col, df.columns.tolist())
     
-    # Tracking fields (optional) — try multiple Bengali header variants
-    name_col = resolve_column_name("উপকারভোগীর নাম", df.columns.tolist()) or \
-               resolve_column_name("উপকার ভোগীর নাম (বাংলা) (NID সাথে মিল থাকতে হবে)", df.columns.tolist()) or \
-               resolve_column_name("উপকার ভোগীর নাম", df.columns.tolist()) or \
-               resolve_column_name("Beneficiary Name", df.columns.tolist()) or \
-               resolve_column_name("Name", df.columns.tolist())
+    # Tracking fields (optional)
+    name_col = resolve_column_name("name_bn", df.columns.tolist()) or resolve_column_name("Name", df.columns.tolist())
     
-    card_col = resolve_column_name("কার্ড নং", df.columns.tolist()) or resolve_column_name("Card No", df.columns.tolist())
-    serial_col = resolve_column_name("স্মারক নং", df.columns.tolist()) or resolve_column_name("Master Serial", df.columns.tolist()) or resolve_column_name("Serial", df.columns.tolist())
-    mobile_col = resolve_column_name("মোবাইল নং (নিজ নামে)", df.columns.tolist()) or \
-                 resolve_column_name("মোবাইল নং", df.columns.tolist()) or \
-                 resolve_column_name("মোবাইল নম্বর", df.columns.tolist()) or \
-                 resolve_column_name("Mobile", df.columns.tolist()) or \
-                 resolve_column_name("Mobile Number", df.columns.tolist())
+    card_col = resolve_column_name("card_no", df.columns.tolist()) or resolve_column_name("Card No", df.columns.tolist())
+    serial_col = resolve_column_name("master_serial", df.columns.tolist()) or resolve_column_name("স্মারক নং", df.columns.tolist()) or resolve_column_name("Serial", df.columns.tolist())
+    mobile_col = resolve_column_name("mobile", df.columns.tolist()) or resolve_column_name("Mobile Number", df.columns.tolist())
+
     
     # Ensure mandatory columns exist
     if not actual_dob_col or not actual_nid_col:

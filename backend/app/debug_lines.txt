@@ -1,0 +1,21 @@
+241:         v_df["Status"] = "valid"
+242:         frames.append(v_df)
+243:     if i_df is not None and not i_df.empty:
+244:         i_df["Status"] = "error"
+245:         # Invalid records already have Status and Message
+246:         frames.append(i_df)
+247: 
+248:             combined = pd.concat(frames, ignore_index=True)
+249:     
+250:     # Expand original columns from the JSON 'data' field
+251:     if "data" in combined.columns:
+252:         valid_json_rows = combined["data"].notna()
+253:         if valid_json_rows.any():
+254:             data_series = combined.loc[valid_json_rows, "data"]
+255:             if isinstance(data_series.iloc[0], str):
+256:                 import json
+257:                 data_series = data_series.apply(lambda x: json.loads(x) if isinstance(x, str) else x)
+258:             
+259:             expanded_data = pd.json_normalize(data_series.tolist())
+260:             expanded_data.index = combined.index[valid_json_rows]
+261:             combined = pd.concat([combined, expanded_data], axis=1)

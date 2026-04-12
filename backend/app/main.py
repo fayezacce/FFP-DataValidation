@@ -135,9 +135,63 @@ def migrate_schema(db: Session):
             db.commit()
             idx_name = f"ix_{table}_geo_names"
             db.execute(text(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} (division, district, upazila)"))
+            
+            # CRITICAL PERFORMANCE INDEX for statistics dashboard
+            idx_upz_name = f"ix_{table}_upazila_id"
+            db.execute(text(f"CREATE INDEX IF NOT EXISTS {idx_upz_name} ON {table} (upazila_id)"))
+            
             db.commit()
         except Exception:
             db.rollback()
+
+    # New UploadBatch URL columns
+    new_batch_columns = [
+        ("valid_url", "VARCHAR"),
+        ("invalid_url", "VARCHAR"),
+        ("pdf_url", "VARCHAR"),
+        ("pdf_invalid_url", "VARCHAR"),
+    ]
+    for col_name, col_def in new_batch_columns:
+        try:
+            db.execute(text(f"ALTER TABLE upload_batches ADD COLUMN IF NOT EXISTS {col_name} {col_def}"))
+            db.commit()
+        except Exception:
+            db.rollback()
+
+    # Legacy URL prefix fix (/api/downloads/ -> /api/export/download/)
+    # This ensures that even if local files are missing, the URLs point to the correct current REST endpoint.
+    try:
+        # Summary Stats
+        db.execute(text("""
+            UPDATE summary_stats 
+            SET excel_valid_url = REPLACE(excel_valid_url, '/api/downloads/', '/api/export/download/'),
+                excel_invalid_url = REPLACE(excel_invalid_url, '/api/downloads/', '/api/export/download/'),
+                pdf_invalid_url = REPLACE(pdf_invalid_url, '/api/downloads/', '/api/export/download/'),
+                excel_url = REPLACE(excel_url, '/api/downloads/', '/api/export/download/'),
+                pdf_url = REPLACE(pdf_url, '/api/downloads/', '/api/export/download/')
+            WHERE excel_valid_url LIKE '/api/downloads/%' 
+               OR excel_invalid_url LIKE '/api/downloads/%'
+               OR pdf_invalid_url LIKE '/api/downloads/%'
+               OR excel_url LIKE '/api/downloads/%'
+               OR pdf_url LIKE '/api/downloads/%'
+        """))
+        # Upload Batches
+        db.execute(text("""
+            UPDATE upload_batches 
+            SET valid_url = REPLACE(valid_url, '/api/downloads/', '/api/export/download/'),
+                invalid_url = REPLACE(invalid_url, '/api/downloads/', '/api/export/download/'),
+                pdf_url = REPLACE(pdf_url, '/api/downloads/', '/api/export/download/'),
+                pdf_invalid_url = REPLACE(pdf_invalid_url, '/api/downloads/', '/api/export/download/')
+            WHERE valid_url LIKE '/api/downloads/%'
+               OR invalid_url LIKE '/api/downloads/%'
+               OR pdf_url LIKE '/api/downloads/%'
+               OR pdf_invalid_url LIKE '/api/downloads/%'
+        """))
+        db.commit()
+        logger.info("Migrated legacy URL prefixes in database.")
+    except Exception as e:
+        logger.error(f"Error migrating legacy URLs: {e}")
+        db.rollback()
 
     invalid_cols = [("card_no", "VARCHAR"), ("master_serial", "VARCHAR"), ("mobile", "VARCHAR")]
     for col_name, col_def in invalid_cols:
@@ -160,6 +214,7 @@ def migrate_schema(db: Session):
 
     try:
         db.execute(text("ALTER TABLE valid_records ADD COLUMN IF NOT EXISTS batch_id INTEGER"))
+        db.execute(text("ALTER TABLE valid_records ADD COLUMN IF NOT EXISTS mobile VARCHAR"))
         db.commit()
     except Exception:
         db.rollback()
@@ -178,6 +233,15 @@ def migrate_schema(db: Session):
                 db.commit()
             except Exception:
                 db.rollback()
+
+    # Preserve original excel column headers per upazila and per batch
+    for table in ["summary_stats", "upload_batches"]:
+        try:
+            db.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS column_headers JSON"))
+            db.commit()
+            logger.info(f"Migrated: added column_headers to {table}")
+        except Exception:
+            db.rollback()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

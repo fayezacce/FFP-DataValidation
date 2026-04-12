@@ -103,6 +103,9 @@ class SummaryStats(Base):
     excel_valid_url = Column(String)
     excel_invalid_url = Column(String)
     pdf_invalid_url = Column(String)
+    # Original excel column headers preserved per-upazila (ordered list of original names)
+    # Updated on every upload so it always reflects the most recent file's headers.
+    column_headers = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
@@ -131,7 +134,13 @@ class UploadBatch(Base):
     upazila_id = Column(Integer, index=True, nullable=True)
     new_records = Column(Integer)
     updated_records = Column(Integer)
+    valid_url = Column(String)
+    invalid_url = Column(String)
+    pdf_url = Column(String)
+    pdf_invalid_url = Column(String)
     status = Column(String, default="completed") # completed | deleted
+    # Original excel column headers at time of this upload (ordered list)
+    column_headers = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=_utcnow)
 
 class ValidRecord(Base):
@@ -151,6 +160,7 @@ class ValidRecord(Base):
     batch_id = Column(Integer, index=True) # Linked to upload_batches.id
     upload_batch = Column(Integer, default=1)  # Keeping this for legacy compatibility (as version)
     card_no = Column(String, index=True) # Unique card number for upazila
+    mobile = Column(String, index=True) # Secondary identifier
     data = Column(JSON)  # Stores all original Excel fields
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
@@ -161,6 +171,7 @@ class ValidRecord(Base):
         Index('ix_valid_record_name', 'name'),
         Index('ix_valid_record_batch', 'upload_batch'),
         Index('ix_valid_record_batch_id', 'batch_id'),
+        Index('ix_valid_upazila_nid', 'upazila_id', 'nid'),
         # Trigram indexes for fast global search (requires pg_trgm)
         Index('ix_valid_record_nid_trgm', 'nid', postgresql_using='gist', postgresql_ops={'nid': 'gist_trgm_ops'}),
         Index('ix_valid_record_name_trgm', 'name', postgresql_using='gist', postgresql_ops={'name': 'gist_trgm_ops'}),
@@ -191,9 +202,9 @@ class InvalidRecord(Base):
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     __table_args__ = (
-        Index('ix_invalid_record_district_upazila', 'district', 'upazila'),
         Index('ix_invalid_record_batch', 'upload_batch'),
         Index('ix_invalid_record_batch_id', 'batch_id'),
+        Index('ix_invalid_upazila_nid', 'upazila_id', 'nid'),
     )
 
 class UploadedFile(Base):
@@ -260,3 +271,26 @@ class BackgroundTask(Base):
     error_details = Column(String, nullable=True)
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+class ExportHistory(Base):
+    __tablename__ = "export_history"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)
+    username = Column(String, index=True)
+    scope = Column(String)  # all | division | district | upazila
+    scope_value = Column(String, nullable=True) # Name of div/dist/upz
+    export_type = Column(String) # all | new
+    record_count = Column(Integer)
+    filename = Column(String)
+    created_at = Column(DateTime, default=_utcnow)
+
+class ExportTracking(Base):
+    __tablename__ = "export_tracking"
+    id = Column(Integer, primary_key=True, index=True)
+    scope = Column(String, index=True)  # all | division | district | upazila
+    scope_value = Column(String, index=True, nullable=True)
+    last_exported_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('scope', 'scope_value', name='uix_scope_value'),
+    )

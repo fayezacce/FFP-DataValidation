@@ -102,3 +102,4 @@ debug_*.py
 backend/debug_*.py
 backend_crash_logs.txt
 *.sql
+tmp_*.txt

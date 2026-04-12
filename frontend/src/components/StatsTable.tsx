@@ -4,9 +4,9 @@
 
 import React, { useState } from "react";
 import { 
-  ChevronRight, ChevronDown, MapPin, Hash, CheckCircle2, FileWarning, 
-  Clock, FileSpreadsheet, FileText, Printer, Search as SearchIcon, 
-  Edit2, Trash2, RefreshCw, BarChart3, Download, Square, CheckSquare, MinusSquare
+  ChevronRight, ChevronDown, MapPin, CheckCircle2, FileWarning, 
+  Clock, FileSpreadsheet, FileText, Download, Square, CheckSquare, MinusSquare,
+  BarChart3, Edit2, Trash2, Loader2
 } from "lucide-react";
 import { StatsEntry } from "@/types/ffp";
 
@@ -21,7 +21,7 @@ interface StatsTableProps {
   recheckResult: { msg: string; flagged: number } | null;
   buildLiveExportUrl: (entry: StatsEntry, fmt: string) => string;
   buildLiveExportInvalidUrl: (entry: StatsEntry, fmt: string) => string;
-  downloadFileWithAuth: (url: string, filename: string) => void;
+  downloadFileWithAuth: (url: string, filename: string, onStart?: () => void, onFinish?: () => void) => void;
   selectedDivisions: Set<string>;
   selectedDistricts: Set<string>;
   onToggleDivision: (divName: string) => void;
@@ -46,9 +46,25 @@ const StatsTable: React.FC<StatsTableProps> = ({
   onToggleDistrict,
 }) => {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
   const toggleExpand = (id: string) => {
     setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const expandAll = () => {
+    const next: Record<string, boolean> = {};
+    hierarchy.forEach(div => {
+      next[div.name] = true;
+      Object.keys(div.districts).forEach(dist => {
+        next[div.name + dist] = true;
+      });
+    });
+    setExpanded(next);
+  };
+
+  const collapseAll = () => {
+    setExpanded({});
   };
 
   const formatDate = (iso: string) => {
@@ -57,238 +73,244 @@ const StatsTable: React.FC<StatsTableProps> = ({
     });
   };
 
-  const getHealthColor = (valid: number, total: number) => {
-    if (total === 0) return "";
-    const pct = (valid / total) * 100;
-    if (pct >= 100) return "text-emerald-400";
-    if (pct >= 90) return "text-yellow-400";
-    return "text-red-400";
+  // Remaining Calculation: Target (Quota) - Valid Records
+  const getRemaining = (target: number, valid: number) => {
+    const rem = target - valid;
+    if (rem < 0) return `(${Math.abs(rem)})`;
+    return rem.toLocaleString();
   };
 
-  // Check if a division is fully selected (all its districts selected)
-  const isDivFullySelected = (divNode: any) => {
-    return selectedDivisions.has(divNode.name);
-  };
-
-  // Check if a division is partially selected (some districts selected)
+  const isDivFullySelected = (divNode: any) => selectedDivisions.has(divNode.name);
   const isDivPartiallySelected = (divNode: any) => {
     if (selectedDivisions.has(divNode.name)) return false;
     return Object.values(divNode.districts).some((d: any) => selectedDistricts.has(`${divNode.name}|${d.name}`));
   };
+  const isDistSelected = (divName: string, distName: string) => 
+    selectedDivisions.has(divName) || selectedDistricts.has(`${divName}|${distName}`);
 
-  const isDistSelected = (divName: string, distName: string) => {
-    return selectedDivisions.has(divName) || selectedDistricts.has(`${divName}|${distName}`);
+  // Header Checkbox Logic
+  const allDivsSelected = hierarchy.length > 0 && hierarchy.every(div => selectedDivisions.has(div.name));
+  const someDivsSelected = hierarchy.some(div => selectedDivisions.has(div.name) || Object.values(div.districts).some((d: any) => selectedDistricts.has(`${div.name}|${d.name}`)));
+
+  const handleToggleAll = () => {
+    if (allDivsSelected) {
+      hierarchy.forEach(div => {
+        if (selectedDivisions.has(div.name)) onToggleDivision(div.name);
+      });
+    } else {
+      hierarchy.forEach(div => {
+        if (!selectedDivisions.has(div.name)) onToggleDivision(div.name);
+      });
+    }
   };
 
   return (
-    <div className="bg-[#121214] border border-[#1e1e20] rounded-2xl overflow-hidden shadow-2xl">
-      <div className="overflow-x-auto custom-scrollbar">
-        <table className="w-full text-left border-collapse min-w-[1000px]">
-          <thead>
-            <tr className="bg-[#1a1a1c] text-gray-500 text-[10px] uppercase font-black tracking-widest border-b border-[#2a2a2e]">
-              <th className="px-3 py-4 w-10"></th>
-              <th className="px-2 py-4 w-10"></th>
-              <th className="px-6 py-4 min-w-[200px]">Location (Division / District / Upazila)</th>
-              <th className="px-6 py-4 text-center">Total (Unique)</th>
-              <th className="px-6 py-4 text-center">Validated</th>
-              <th className="px-6 py-4 text-center">Invalid</th>
-              <th className="px-6 py-4 text-center">Quota Status</th>
-              <th className="px-6 py-4 text-center">Action</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-[#1e1e20]">
-            {hierarchy.map((divNode: any) => (
-              <React.Fragment key={divNode.name}>
-                {/* Division Row */}
-                <tr className="bg-[#0f0f11] hover:bg-[#161618] transition-colors group">
-                  <td className="px-3 py-4 text-center">
-                    <button
-                      onClick={(e) => { e.stopPropagation(); onToggleDivision(divNode.name); }}
-                      className="p-0.5 rounded hover:bg-white/10 transition-colors"
-                      title={`Select all in ${divNode.name}`}
-                    >
-                      {isDivFullySelected(divNode) ? (
-                        <CheckSquare className="w-4 h-4 text-emerald-500" />
-                      ) : isDivPartiallySelected(divNode) ? (
-                        <MinusSquare className="w-4 h-4 text-amber-500" />
-                      ) : (
-                        <Square className="w-4 h-4 text-gray-600 hover:text-gray-400" />
-                      )}
-                    </button>
-                  </td>
-                  <td 
-                    className="px-2 py-4 text-center cursor-pointer"
-                    onClick={() => toggleExpand(divNode.name)}
-                  >
-                    {expanded[divNode.name] ? <ChevronDown className="w-4 h-4 text-emerald-500" /> : <ChevronRight className="w-4 h-4 text-gray-600" />}
-                  </td>
-                  <td className="px-6 py-4 cursor-pointer" onClick={() => toggleExpand(divNode.name)}>
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center">
-                        <MapPin className="w-4 h-4 text-emerald-500" />
+    <div className="space-y-4">
+      {/* Expand/Collapse Controls */}
+      <div className="flex justify-end gap-3 px-1">
+        <button onClick={expandAll} className="text-[10px] uppercase font-bold text-slate-400 hover:text-white transition-colors underline underline-offset-4">Expand All</button>
+        <button onClick={collapseAll} className="text-[10px] uppercase font-bold text-slate-400 hover:text-white transition-colors underline underline-offset-4">Collapse All</button>
+      </div>
+
+      <div className="bg-[#121214] border border-[#1e1e20] rounded-2xl overflow-hidden shadow-2xl">
+        <div className="overflow-x-auto custom-scrollbar">
+          <table className="w-full text-left border-collapse min-w-[1100px]">
+            <thead>
+              <tr className="bg-[#1a1a1c] text-gray-500 text-[10px] uppercase font-black tracking-widest border-b border-[#2a2a2e]">
+                <th className="px-3 py-4 w-10 text-center">
+                  <button onClick={handleToggleAll} className="p-0.5 rounded hover:bg-white/10 transition-colors">
+                    {allDivsSelected ? <CheckSquare className="w-4 h-4 text-emerald-500" /> : someDivsSelected ? <MinusSquare className="w-4 h-4 text-amber-500" /> : <Square className="w-4 h-4 text-gray-600" />}
+                  </button>
+                </th>
+                <th className="px-2 py-4 w-10"></th>
+                <th className="px-6 py-4 min-w-[180px]">Division / District / Upazila</th>
+                <th className="px-4 py-4 text-center">Target</th>
+                <th className="px-4 py-4 text-center">Total</th>
+                <th className="px-4 py-4 text-center text-emerald-400/80 font-black">Valid</th>
+                <th className="px-4 py-4 text-center text-amber-400 font-black">Rem.</th>
+                <th className="px-4 py-4 text-center text-red-400/80 font-black">Invalid</th>
+                <th className="px-6 py-4 text-center">Actions & Downloads</th>
+                <th className="px-6 py-4 text-right">Updated</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#1e1e20]">
+              {hierarchy.map((divNode: any) => (
+                <React.Fragment key={divNode.name}>
+                  {/* Division Row */}
+                  <tr className="bg-[#0f0f11] hover:bg-[#161618] transition-colors group">
+                    <td className="px-3 py-4 text-center">
+                      <button onClick={() => onToggleDivision(divNode.name)} className="p-0.5 rounded hover:bg-white/10 transition-colors">
+                        {isDivFullySelected(divNode) ? <CheckSquare className="w-4 h-4 text-emerald-500" /> : isDivPartiallySelected(divNode) ? <MinusSquare className="w-4 h-4 text-amber-500" /> : <Square className="w-4 h-4 text-gray-600" />}
+                      </button>
+                    </td>
+                    <td className="px-2 py-4 text-center cursor-pointer" onClick={() => toggleExpand(divNode.name)}>
+                      {expanded[divNode.name] ? <ChevronDown className="w-4 h-4 text-emerald-500" /> : <ChevronRight className="w-4 h-4 text-gray-600" />}
+                    </td>
+                    <td className="px-6 py-4 cursor-pointer" onClick={() => toggleExpand(divNode.name)}>
+                      <div className="flex items-center gap-3">
+                        <MapPin className="w-4 h-4 text-emerald-500/50" />
+                        <span className="font-black text-lg text-emerald-500 uppercase tracking-tight">{divNode.name}</span>
                       </div>
-                      <span className="font-black text-lg text-emerald-500 uppercase tracking-tight">{divNode.name}</span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 text-center font-bold text-gray-300">{divNode.total.toLocaleString()}</td>
-                  <td className="px-6 py-4 text-center font-bold text-emerald-400">{divNode.valid.toLocaleString()}</td>
-                  <td className="px-6 py-4 text-center font-bold text-red-500">{divNode.invalid.toLocaleString()}</td>
-                  <td className="px-6 py-4 text-center">
-                    <div className="inline-flex items-center px-2 py-1 rounded-md bg-white/5 border border-white/10">
-                      <span className="text-[10px] text-gray-500 uppercase font-black mr-2">TTL Quota:</span>
-                      <span className="text-sm font-black text-white">{divNode.quota.toLocaleString()}</span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4"></td>
-                </tr>
+                    </td>
+                    <td className="px-4 py-4 text-center font-bold text-gray-500">{divNode.quota.toLocaleString()}</td>
+                    <td className="px-4 py-4 text-center font-bold text-gray-300">{divNode.total.toLocaleString()}</td>
+                    <td className="px-4 py-4 text-center font-bold text-emerald-400">{divNode.valid.toLocaleString()}</td>
+                    <td className="px-4 py-4 text-center font-bold text-amber-500">{getRemaining(divNode.quota, divNode.valid)}</td>
+                    <td className="px-4 py-4 text-center font-bold text-red-500">{divNode.invalid.toLocaleString()}</td>
+                    <td className="px-6 py-4"></td>
+                    <td className="px-6 py-4"></td>
+                  </tr>
 
-                {expanded[divNode.name] && Object.values(divNode.districts).map((distNode: any) => (
-                  <React.Fragment key={distNode.name}>
-                    {/* District Row */}
-                    <tr className="bg-[#141416] hover:bg-[#1c1c1e] transition-colors group">
-                      <td className="px-3 py-4 text-center pl-8">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); onToggleDistrict(divNode.name, distNode.name); }}
-                          className="p-0.5 rounded hover:bg-white/10 transition-colors"
-                          title={`Select all in ${distNode.name}`}
-                        >
-                          {isDistSelected(divNode.name, distNode.name) ? (
-                            <CheckSquare className="w-3.5 h-3.5 text-blue-500" />
-                          ) : (
-                            <Square className="w-3.5 h-3.5 text-gray-600 hover:text-gray-400" />
-                          )}
-                        </button>
-                      </td>
-                      <td 
-                        className="px-2 py-4 text-center pl-8 cursor-pointer"
-                        onClick={() => toggleExpand(divNode.name + distNode.name)}
-                      >
-                        {expanded[divNode.name + distNode.name] ? <ChevronDown className="w-3 h-3 text-blue-500" /> : <ChevronRight className="w-3 h-3 text-gray-700" />}
-                      </td>
-                      <td className="px-6 py-4 pl-12 cursor-pointer" onClick={() => toggleExpand(divNode.name + distNode.name)}>
-                        <div className="flex items-center gap-3">
-                          <div className="w-6 h-6 rounded-md bg-blue-500/10 flex items-center justify-center">
-                            <MapPin className="w-3 h-3 text-blue-500" />
-                          </div>
+                  {expanded[divNode.name] && Object.values(divNode.districts).map((distNode: any) => (
+                    <React.Fragment key={distNode.name}>
+                      {/* District Row */}
+                      <tr className="bg-[#141416] hover:bg-[#1c1c1e] transition-colors group">
+                        <td className="px-3 py-4 text-center pl-8">
+                          <button onClick={() => onToggleDistrict(divNode.name, distNode.name)} className="p-0.5 rounded hover:bg-white/10 transition-colors">
+                            {isDistSelected(divNode.name, distNode.name) ? <CheckSquare className="w-3.5 h-3.5 text-blue-500" /> : <Square className="w-3.5 h-3.5 text-gray-700" />}
+                          </button>
+                        </td>
+                        <td className="px-2 py-4 text-center pl-8 cursor-pointer" onClick={() => toggleExpand(divNode.name + distNode.name)}>
+                          {expanded[divNode.name + distNode.name] ? <ChevronDown className="w-3 h-3 text-blue-500" /> : <ChevronRight className="w-3 h-3 text-gray-700" />}
+                        </td>
+                        <td className="px-6 py-4 pl-12 cursor-pointer" onClick={() => toggleExpand(divNode.name + distNode.name)}>
                           <span className="font-bold text-blue-400 uppercase tracking-wide">{distNode.name}</span>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 text-center text-sm font-semibold text-gray-400">{distNode.total.toLocaleString()}</td>
-                      <td className="px-6 py-4 text-center text-sm font-semibold text-emerald-500/80">{distNode.valid.toLocaleString()}</td>
-                      <td className="px-6 py-4 text-center text-sm font-semibold text-red-500/80">{distNode.invalid.toLocaleString()}</td>
-                      <td className="px-6 py-4 text-center">
-                        <span className="text-xs font-bold text-gray-500">{distNode.quota.toLocaleString()}</span>
-                      </td>
-                      <td className="px-6 py-4"></td>
-                    </tr>
+                        </td>
+                        <td className="px-4 py-4 text-center text-sm font-semibold text-gray-600">{distNode.quota.toLocaleString()}</td>
+                        <td className="px-4 py-4 text-center text-sm font-semibold text-gray-400">{distNode.total.toLocaleString()}</td>
+                        <td className="px-4 py-4 text-center text-sm font-semibold text-emerald-500/80">{distNode.valid.toLocaleString()}</td>
+                        <td className="px-4 py-4 text-center text-sm font-semibold text-amber-500/80">{getRemaining(distNode.quota, distNode.valid)}</td>
+                        <td className="px-4 py-4 text-center text-sm font-semibold text-red-500/80">{distNode.invalid.toLocaleString()}</td>
+                        <td className="px-6 py-4"></td>
+                        <td className="px-6 py-4"></td>
+                      </tr>
 
-                    {expanded[divNode.name + distNode.name] && distNode.upazilas.map((upz: StatsEntry) => (
-                      <tr key={upz.id} className="bg-[#121214] hover:bg-emerald-500/[0.02] transition-colors group/row">
-                        <td className="px-3 py-4"></td>
-                        <td className="px-2 py-4"></td>
-                        <td className="px-6 py-4 pl-20 min-w-[300px]">
-                          <div className="flex flex-col">
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="font-bold text-white group-hover/row:text-emerald-400 transition-colors">{upz.upazila}</span>
-                              {upz.version > 1 && (
-                                <span className="bg-amber-500/10 text-amber-500 text-[8px] font-black uppercase px-1.5 py-0.5 rounded border border-amber-500/20">V{upz.version}</span>
+                      {expanded[divNode.name + distNode.name] && distNode.upazilas.map((upz: StatsEntry) => (
+                        <tr key={upz.id} className="bg-[#121214] hover:bg-emerald-500/[0.02] transition-colors group/row border-l-2 border-transparent hover:border-emerald-500/30">
+                          <td className="px-3 py-4"></td>
+                          <td className="px-2 py-4 text-center">
+                            <MapPin className="w-3 h-3 text-slate-700 mx-auto" />
+                          </td>
+                          <td className="px-6 py-4 pl-16">
+                            <span className="font-bold text-white group-hover/row:text-emerald-400 transition-colors uppercase tracking-tight">{upz.upazila}</span>
+                          </td>
+                          <td className="px-4 py-4 text-center text-sm font-medium text-slate-500">{upz.quota.toLocaleString()}</td>
+                          <td className="px-4 py-4 text-center text-sm font-medium text-slate-400">{upz.total.toLocaleString()}</td>
+                          <td className="px-4 py-4 text-center text-sm font-bold text-emerald-500/70">{upz.valid.toLocaleString()}</td>
+                          <td className="px-4 py-4 text-center text-sm font-bold text-amber-500/70">{getRemaining(upz.quota, upz.valid)}</td>
+                          <td className="px-4 py-4 text-center text-sm font-bold text-red-500/70">{upz.invalid.toLocaleString()}</td>
+                          <td className="px-6 py-4">
+                            <div className="flex items-center justify-center gap-2">
+                              {/* Action Tools: Downloads with loading states */}
+                              <div className="flex bg-slate-900/50 rounded-lg p-1 border border-slate-800">
+                                <button 
+                                  disabled={!!downloadingId}
+                                  onClick={() => {
+                                    const id = `${upz.id}-checked`;
+                                    const qs = new URLSearchParams({
+                                      division: upz.division,
+                                      district: upz.district,
+                                      upazila: upz.upazila,
+                                      upazila_id: upz.id?.toString() || "",
+                                    });
+                                    downloadFileWithAuth(
+                                      `/api/export/live-checked?${qs.toString()}`, 
+                                      `${upz.district}_${upz.upazila}_Checked.xlsx`,
+                                      () => setDownloadingId(id),
+                                      () => setDownloadingId(null)
+                                    );
+                                  }}
+                                  className={`p-1.5 rounded transition-all flex items-center gap-1 ${
+                                    downloadingId === `${upz.id}-checked` ? 'bg-cyan-500/20 text-cyan-400' : 'hover:bg-cyan-500/20 text-cyan-500'
+                                  } ${!!downloadingId ? 'opacity-50 cursor-not-allowed' : ''}`} 
+                                  title="Checked xlsx (All records, Highlighted)"
+                                >
+                                  {downloadingId === `${upz.id}-checked` ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileSpreadsheet className="w-3.5 h-3.5" />}
+                                  <span className="text-[10px] font-bold">Checked</span>
+                                </button>
+
+                                <div className="w-[1px] bg-slate-800 mx-1"></div>
+
+                                <button 
+                                  disabled={!!downloadingId}
+                                  onClick={() => {
+                                    const id = `${upz.id}-valid`;
+                                    downloadFileWithAuth(
+                                      buildLiveExportUrl(upz, "xlsx"), 
+                                      `${upz.district}_${upz.upazila}_Valid.xlsx`,
+                                      () => setDownloadingId(id),
+                                      () => setDownloadingId(null)
+                                    );
+                                  }}
+                                  className={`p-1.5 rounded transition-all flex items-center gap-1 ${
+                                    downloadingId === `${upz.id}-valid` ? 'bg-emerald-500/20 text-emerald-400' : 'hover:bg-emerald-500/20 text-emerald-500'
+                                  } ${!!downloadingId ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                  title="Valid Records Only"
+                                >
+                                  {downloadingId === `${upz.id}-valid` ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                                  <span className="text-[10px] font-bold">Valid</span>
+                                </button>
+
+                                <div className="w-[1px] bg-slate-800 mx-1"></div>
+
+                                <button 
+                                  disabled={!!downloadingId}
+                                  onClick={() => {
+                                    const id = `${upz.id}-invalid`;
+                                    downloadFileWithAuth(
+                                      buildLiveExportInvalidUrl(upz, "pdf"), 
+                                      `${upz.district}_${upz.upazila}_Invalid.pdf`,
+                                      () => setDownloadingId(id),
+                                      () => setDownloadingId(null)
+                                    );
+                                  }}
+                                  className={`p-1.5 rounded transition-all flex items-center gap-1 ${
+                                    downloadingId === `${upz.id}-invalid` ? 'bg-red-500/20 text-red-400' : 'hover:bg-red-500/20 text-red-500'
+                                  } ${!!downloadingId ? 'opacity-50 cursor-not-allowed' : ''}`} 
+                                  title="Invalid Summary PDF"
+                                >
+                                  {downloadingId === `${upz.id}-invalid` ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
+                                  <span className="text-[10px] font-bold">Invalid</span>
+                                </button>
+                              </div>
+
+                              <div className="w-[1px] h-6 bg-slate-800/50 mx-1"></div>
+
+                              {/* Action Tools */}
+                              <button onClick={() => onRecheck(upz)} disabled={recheckLoading === `${upz.division}|${upz.district}|${upz.upazila}`}
+                                className={`p-1.5 rounded-lg ${recheckLoading === `${upz.division}|${upz.district}|${upz.upazila}` ? 'bg-amber-500/20 animate-spin' : 'bg-amber-500/10'} text-amber-500 hover:bg-amber-500 hover:text-white transition-all`}
+                                title="Reanalyze (Fraud Detection)">
+                                <BarChart3 className="w-3.5 h-3.5" />
+                              </button>
+                              
+                              <button onClick={() => onOpenHistory(upz)} className="p-1.5 rounded-lg bg-blue-500/10 text-blue-500 hover:bg-blue-500 hover:text-white transition-all" title="Upload History">
+                                <Clock className="w-3.5 h-3.5" />
+                              </button>
+
+                              {isAdmin && (
+                                <>
+                                  <button onClick={() => onOpenEdit(upz)} className="p-1.5 rounded-lg bg-gray-700/20 text-gray-500 hover:bg-gray-700 hover:text-white transition-all" title="Edit">
+                                    <Edit2 className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button onClick={() => onDeleteUpazila(upz)} className="p-1.5 rounded-lg bg-red-900/10 text-red-800 hover:bg-red-600 hover:text-white transition-all" title="Wipe">
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </>
                               )}
                             </div>
-                            <div className="flex items-center text-[10px] text-gray-600 gap-1.5 flex-wrap">
-                              <span className="flex items-center gap-1"><Clock className="w-2.5 h-2.5" /> {formatDate(upz.updated_at)}</span>
-                              <span className="text-gray-800">|</span>
-                              <span className="text-emerald-500/60 font-medium truncate max-w-[150px]" title={upz.filename}>{upz.filename}</span>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 text-center">
-                          <div className="flex flex-col items-center">
-                            <span className="text-sm font-bold text-gray-300">{upz.total.toLocaleString()}</span>
-                            <span className="text-[9px] font-black text-gray-600 uppercase tracking-tighter">Total Unique</span>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 text-center">
-                          <div className="flex flex-col items-center">
-                            <span className={`text-sm font-bold ${getHealthColor(upz.valid, upz.total)}`}>{upz.valid.toLocaleString()}</span>
-                            <span className="text-[9px] font-black text-gray-600 uppercase tracking-tighter">Success</span>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 text-center">
-                          <div className="flex flex-col items-center">
-                            <span className="text-sm font-bold text-red-500/80">{upz.invalid.toLocaleString()}</span>
-                            <span className="text-[9px] font-black text-gray-600 uppercase tracking-tighter">Failed</span>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 text-center">
-                          <div className="w-full max-w-[120px] mx-auto space-y-1.5">
-                            <div className="flex justify-between text-[9px] font-black uppercase tracking-tighter">
-                              <span className="text-gray-500">Utilization</span>
-                              <span className="text-gray-400">{upz.quota > 0 ? Math.round((upz.valid / upz.quota) * 100) : 0}%</span>
-                            </div>
-                            <div className="h-1.5 w-full bg-black/40 rounded-full overflow-hidden border border-white/5">
-                              <div 
-                                className={`h-full transition-all duration-1000 ${upz.valid > upz.quota ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]' : 'bg-emerald-500'}`}
-                                style={{ width: `${Math.min(100, (upz.valid / (upz.quota || 1)) * 100)}%` }}
-                              ></div>
-                            </div>
-                            <div className="text-[9px] font-medium text-gray-600 text-center uppercase">Quota: {upz.quota.toLocaleString()}</div>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="flex items-center justify-center gap-1.5 opacity-40 group-hover/row:opacity-100 transition-all duration-300">
-                            <button 
-                              onClick={() => downloadFileWithAuth(buildLiveExportUrl(upz, "xlsx"), `${upz.district}_${upz.upazila}_Live.xlsx`)}
-                              className="p-2 rounded-lg bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500 hover:text-white transition-all"
-                              title="Live Export Valid"
-                            >
-                              <Download className="w-3.5 h-3.5" />
-                            </button>
-                            
-                            <button 
-                              onClick={() => onRecheck(upz)}
-                              disabled={recheckLoading === `${upz.division}|${upz.district}|${upz.upazila}`}
-                              className={`p-2 rounded-lg ${recheckLoading === `${upz.division}|${upz.district}|${upz.upazila}` ? 'bg-amber-500/20 animate-spin' : 'bg-amber-500/10'} text-amber-500 hover:bg-amber-500 hover:text-white transition-all`}
-                              title="Fraud Detection"
-                            >
-                              <BarChart3 className="w-3.5 h-3.5" />
-                            </button>
-
-                            <button 
-                              onClick={() => onOpenHistory(upz)}
-                              className="p-2 rounded-lg bg-blue-500/10 text-blue-500 hover:bg-blue-500 hover:text-white transition-all"
-                              title="Upload History"
-                            >
-                              <Clock className="w-3.5 h-3.5" />
-                            </button>
-
-                            {isAdmin && (
-                              <>
-                                <button 
-                                  onClick={() => onOpenEdit(upz)}
-                                  className="p-2 rounded-lg bg-gray-500/10 text-gray-400 hover:bg-gray-500 hover:text-white transition-all"
-                                  title="Edit Records"
-                                >
-                                  <Edit2 className="w-3.5 h-3.5" />
-                                </button>
-                                <button 
-                                  onClick={() => onDeleteUpazila(upz)}
-                                  className="p-2 rounded-lg bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white transition-all"
-                                  title="Wipe Data"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </React.Fragment>
-                ))}
-              </React.Fragment>
-            ))}
-          </tbody>
-        </table>
+                          </td>
+                          <td className="px-6 py-4 text-right text-[10px] text-slate-500 font-mono">
+                            {formatDate(upz.updated_at)}
+                          </td>
+                        </tr>
+                      ))}
+                    </React.Fragment>
+                  ))}
+                </React.Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

@@ -97,7 +97,13 @@ export const fetchWithAuth = async (url: string, options: RequestInit = {}) => {
  * Authenticated Download Helper
  * Uses fetch with auth header and creates a Blob for download
  */
-export const downloadFileWithAuth = async (url: string, filename?: string) => {
+export const downloadFileWithAuth = async (
+  url: string, 
+  filename?: string, 
+  onStart?: () => void, 
+  onFinish?: () => void
+) => {
+  if (onStart) onStart();
   try {
     const response = await fetchWithAuth(url);
     if (!response.ok) {
@@ -109,19 +115,15 @@ export const downloadFileWithAuth = async (url: string, filename?: string) => {
       throw new Error(errorMsg);
     }
     
-    // 1. Try to get pristine filename from Content-Disposition header (takes absolute precedence)
+    // 1. Try to get pristine filename from Content-Disposition header
     let finalFileName = "";
     try {
       const contentDisposition = response.headers.get('content-disposition');
-      console.log("[Download] Content-Disposition:", contentDisposition);
-      
       if (contentDisposition) {
-        // Check for UTF-8 encoded filename*=utf-8''...
         const utf8Match = contentDisposition.match(/filename\*=utf-8''([^;]+)/i);
         if (utf8Match && utf8Match[1]) {
           finalFileName = decodeURIComponent(utf8Match[1]);
         } else {
-          // Fallback to standard filename="..." or filename=...
           const normalMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
           if (normalMatch && normalMatch[1]) {
             finalFileName = normalMatch[1];
@@ -132,12 +134,10 @@ export const downloadFileWithAuth = async (url: string, filename?: string) => {
       console.error("[Download] Header parsing failed:", headerErr);
     }
     
-    // 2. If no header, fallback to the explicitly provided filename
     if (!finalFileName && filename) {
       finalFileName = filename;
     }
     
-    // 3. Absolute fallback to parsing the URL path
     if (!finalFileName) {
       try {
         const urlWithoutQuery = url.split('?')[0];
@@ -147,14 +147,11 @@ export const downloadFileWithAuth = async (url: string, filename?: string) => {
       }
     }
     
-    // Clean up filename: decode and remove potential query residues
     try {
       finalFileName = decodeURIComponent(finalFileName.replace(/\+/g, ' ')).split('?')[0];
     } catch (cleanErr) {
       console.warn("[Download] Filename cleanup failed, using raw:", finalFileName);
     }
-    
-    console.log("[Download] Final Filename:", finalFileName);
     
     const blob = await response.blob();
     const downloadUrl = window.URL.createObjectURL(blob);
@@ -164,8 +161,6 @@ export const downloadFileWithAuth = async (url: string, filename?: string) => {
     document.body.appendChild(link);
     link.click();
     
-    // DELAY CLEANUP: Some browsers (Chrome/Windows) cancel the download 
-    // if the URL is revoked immediately after the click.
     setTimeout(() => {
       if (document.body.contains(link)) {
         document.body.removeChild(link);
@@ -175,5 +170,7 @@ export const downloadFileWithAuth = async (url: string, filename?: string) => {
   } catch (error) {
     console.error("Authenticated download error:", error);
     alert("Failed to download file. Please check your connection and login status.");
+  } finally {
+    if (onFinish) onFinish();
   }
 };

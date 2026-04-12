@@ -20,14 +20,35 @@ services:
     # Port 8000 NOT exposed externally - only reachable inside docker network via nginx
     environment:
       - MAX_UPLOAD_SIZE=20971520 # 20MB
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-fayez}:${POSTGRES_PASSWORD:-fayez_secret}@db:5432/ffp_validator
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-fayez}:${POSTGRES_PASSWORD:-fayez_secret}@pgbouncer:6432/ffp_validator
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set in .env}
       - WATCHFILES_FORCE_POLLING=true
-      - POSTGRES_HOST=db
+      - POSTGRES_HOST=pgbouncer
+      - POSTGRES_PORT=6432
     volumes:
       - ./backend:/app
       - ./downloads:/app/downloads
       - ./uploads:/app/uploads
+    depends_on:
+      - db
+      - pgbouncer
+    networks:
+      - app_network
+
+  pgbouncer:
+    image: edoburu/pgbouncer
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-fayez}:${POSTGRES_PASSWORD:-fayez_secret}@db:5432/ffp_validator
+      - DB_USER=${POSTGRES_USER:-fayez}
+      - DB_PASSWORD=${POSTGRES_PASSWORD:-fayez_secret}
+      - DB_HOST=db
+      - DB_PORT=5432
+      - LISTEN_PORT=6432
+      - POOL_MODE=transaction
+      - MAX_CLIENT_CONN=500
+      - DEFAULT_POOL_SIZE=50
+      - ADMIN_USERS=${POSTGRES_USER:-fayez}
+      - AUTH_TYPE=scram-sha-256
     depends_on:
       - db
     networks:

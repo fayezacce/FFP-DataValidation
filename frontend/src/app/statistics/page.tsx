@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { 
   ArrowLeft, RefreshCw, BarChart3, FileWarning, Search as SearchIcon, 
-  Download, Printer, FileText, CheckCircle2, Clock 
+  Download, Printer, FileText, CheckCircle2, Clock, FileSpreadsheet 
 } from "lucide-react";
 import { fetchWithAuth, getBackendUrl, downloadFileWithAuth } from "@/lib/auth";
 
@@ -161,6 +161,26 @@ export default function StatisticsPage() {
     } catch (e) { console.error(e); }
   };
 
+  const handleExportStandardCSV = async (scope: 'global' | 'selected', only_new: boolean) => {
+    const divisions = scope === 'selected' ? Array.from(selectedDivisions) : undefined;
+    const districts = scope === 'selected' ? Array.from(selectedDistricts).map(k => k.split('|')[1]) : undefined;
+
+    try {
+      const res = await fetchWithAuth('/api/export/standard-csv', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ only_new, divisions, districts }),
+      });
+      if (res.ok) {
+        alert(t("export_csv_started"));
+        if (scope === 'selected') handleClearSelection();
+      } else {
+        const err = await res.json().catch(() => ({ detail: 'Unknown error' }));
+        alert('Failed: ' + (err.detail || 'Unknown error'));
+      }
+    } catch (e) { console.error(e); }
+  };
+
   const buildLiveExportInvalidUrl = (entry: StatsEntry, fmt: string) => {
     const p = new URLSearchParams({
       division: entry.division,
@@ -200,10 +220,10 @@ export default function StatisticsPage() {
         alert(`No suspicious NIDs in ${entry.upazila} (${data.total_checked} checked)`);
       } else {
         const dlp = new URLSearchParams({ division: entry.division, district: entry.district, upazila: entry.upazila, fmt: "xlsx" });
-        downloadFileWithAuth("/api/export/recheck?" + dlp.toString(), `${entry.district}_${entry.upazila}_fraud_report.xlsx`);
+        downloadFileWithAuth("/api/export/recheck?" + dlp.toString(), `${entry.district}_${entry.upazila}_reanalyze_report.xlsx`);
       }
     } catch {
-      alert("Re-check failed");
+      alert("Reanalyze failed");
     } finally {
       setRecheckLoading(null);
     }
@@ -398,8 +418,14 @@ export default function StatisticsPage() {
                 <button onClick={handleDownloadAllValid} className="flex items-center gap-2 px-4 py-3 text-sm text-emerald-400 hover:bg-[#2d2f34] border-b border-[#2d2f34] transition-colors text-left" title="Download all valid records">
                   <CheckCircle2 className="w-4 h-4 shrink-0" /> All Valid
                 </button>
-                <button onClick={handleDownloadAllInvalid} className="flex items-center gap-2 px-4 py-3 text-sm text-red-400 hover:bg-[#2d2f34] transition-colors text-left" title="Download all invalid records">
+                <button onClick={handleDownloadAllInvalid} className="flex items-center gap-2 px-4 py-3 text-sm text-red-400 hover:bg-[#2d2f34] border-b border-[#2d2f34] transition-colors text-left" title="Download all invalid records">
                   <FileWarning className="w-4 h-4 shrink-0" /> All Invalid
+                </button>
+                <button onClick={() => handleExportStandardCSV('global', false)} className="flex items-center gap-2 px-4 py-3 text-sm text-indigo-400 hover:bg-[#2d2f34] border-b border-[#2d2f34] transition-colors text-left font-bold" title="Download standard pipe-separated CSV for all records">
+                  <FileSpreadsheet className="w-4 h-4 shrink-0" /> {t("export_csv_all")}
+                </button>
+                <button onClick={() => handleExportStandardCSV('global', true)} className="flex items-center gap-2 px-4 py-3 text-sm text-amber-400 hover:bg-[#2d2f34] transition-colors text-left font-bold" title="Download standard CSV only for records not exported before">
+                  <FileSpreadsheet className="w-4 h-4 shrink-0" /> {t("export_csv_new")}
                 </button>
               </div>
             </div>
@@ -420,6 +446,12 @@ export default function StatisticsPage() {
                   <button onClick={() => handleDownloadSelected('invalid')} className="flex items-center gap-2 px-4 py-3 text-sm text-red-400 hover:bg-[#2d2f34] border-b border-[#2d2f34] transition-colors text-left">
                     <FileWarning className="w-4 h-4 shrink-0" /> Selected — Invalid
                   </button>
+                  <button onClick={() => handleExportStandardCSV('selected', false)} className="flex items-center gap-2 px-4 py-3 text-sm text-indigo-400 hover:bg-[#2d2f34] border-b border-[#2d2f34] transition-colors text-left font-bold">
+                    <FileSpreadsheet className="w-4 h-4 shrink-0" /> {t("export_csv_all")} (Selected)
+                  </button>
+                  <button onClick={() => handleExportStandardCSV('selected', true)} className="flex items-center gap-2 px-4 py-3 text-sm text-amber-400 hover:bg-[#2d2f34] border-b border-[#2d2f34] transition-colors text-left font-bold">
+                    <FileSpreadsheet className="w-4 h-4 shrink-0" /> {t("export_csv_new")} (Selected)
+                  </button>
                   <button onClick={handleClearSelection} className="flex items-center gap-2 px-4 py-3 text-sm text-gray-400 hover:bg-[#2d2f34] transition-colors text-left">
                     ✕ Clear Selection
                   </button>
@@ -434,21 +466,6 @@ export default function StatisticsPage() {
         </header>
 
         {error && <div className="p-4 rounded-lg bg-red-500/10 border border-red-500/50 text-red-400">{error}</div>}
-
-        {/* Grand Total Cards */}
-        {data && <DashboardCards grandTotal={data.grand_total} loading={loading} />}
-
-        {/* Dashboard Analytics Charts */}
-        {data && <AnalyticsCharts hierarchy={hierarchy} />}
-
-        {/* Empty State */}
-        {!loading && data && data.entries.length === 0 && (
-          <div className="glass-panel rounded-2xl p-12 flex flex-col items-center text-center">
-            <BarChart3 className="w-16 h-16 text-slate-600" />
-            <h2 className="text-xl font-semibold text-slate-300 mt-4">No Statistics Yet</h2>
-            <Link href="/" className="mt-4 bg-indigo-600 text-white px-6 py-2.5 rounded-lg transition-all">Upload & Validate</Link>
-          </div>
-        )}
 
         {/* Statistics Hierarchy Table */}
         {data && data.entries.length > 0 && (
@@ -469,6 +486,18 @@ export default function StatisticsPage() {
             onToggleDivision={handleToggleDivision}
             onToggleDistrict={handleToggleDistrict}
           />
+        )}
+
+        {/* Dashboard Analytics Charts (Moved below table as requested) */}
+        {data && <AnalyticsCharts hierarchy={hierarchy} />}
+
+        {/* Empty State */}
+        {!loading && data && data.entries.length === 0 && (
+          <div className="glass-panel rounded-2xl p-12 flex flex-col items-center text-center">
+            <BarChart3 className="w-16 h-16 text-slate-600" />
+            <h2 className="text-xl font-semibold text-slate-300 mt-4">No Statistics Yet</h2>
+            <Link href="/" className="mt-4 bg-indigo-600 text-white px-6 py-2.5 rounded-lg transition-all">Upload & Validate</Link>
+          </div>
         )}
       </div>
 

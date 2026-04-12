@@ -1,0 +1,13 @@
+ pid | state  |                                  left                                   
+-----+--------+-------------------------------------------------------------------------
+  37 | active | ALTER TABLE upload_batches ADD COLUMN IF NOT EXISTS valid_url VARCHAR
+ 576 | active | autovacuum: VACUUM public.valid_records
+  38 | active | SELECT data FROM valid_records WHERE batch_id = 344 ORDER BY id LIMIT 1
+ 134 | active | LOCK TABLE public.upload_batches IN ACCESS SHARE MODE
+ 195 | active | LOCK TABLE public.upload_batches IN ACCESS SHARE MODE
+ 256 | active | LOCK TABLE public.upload_batches IN ACCESS SHARE MODE
+ 331 | active | LOCK TABLE public.upload_batches IN ACCESS SHARE MODE
+ 524 | active | LOCK TABLE public.upload_batches IN ACCESS SHARE MODE
+ 448 | active | LOCK TABLE public.upload_batches IN ACCESS SHARE MODE
+(9 rows)
+

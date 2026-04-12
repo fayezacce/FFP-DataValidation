@@ -78,3 +78,23 @@ def cleanup_tasks(db: Session = Depends(get_db)):
             pass
 
     return {"message": f"Cleaned up {count} tasks and associated files"}
+@router.delete("/{task_id}", dependencies=[Depends(get_current_user)])
+def cancel_task(task_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    task = db.query(BackgroundTask).filter(
+        BackgroundTask.id == task_id,
+        BackgroundTask.user_id == current_user.id
+    ).first()
+    
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+        
+    if task.status in ["pending", "running"]:
+        task.status = "error"
+        task.message = "Cancelled by user"
+        db.commit()
+        return {"message": "Task cancelled"}
+    
+    # If already done/error, just delete it from UI view if it's the owner
+    db.delete(task)
+    db.commit()
+    return {"message": "Task removed"}

@@ -5,10 +5,13 @@ import logging
 
 logger = logging.getLogger("ffp")
 
-def refresh_summary_stats(db: Session, division: str, district: str, upazila: str, filename: str = None, stats_source: dict = None, current_version: int = None):
+def refresh_summary_stats(db: Session, division: str, district: str, upazila: str, filename: str = None, stats_source: dict = None, current_version: int = None, column_headers: list = None):
     """
     Recalculates Valid/Invalid counts for a specific Upazila from absolute truth (ValidRecord/InvalidRecord tables)
     and updates the SummaryStats table. Highly robust against data drift.
+
+    column_headers: ordered list of original Excel column names. Stored per-upazila so
+                    the export can reconstruct exact original headers at download time.
     """
     from sqlalchemy import func
     
@@ -28,10 +31,27 @@ def refresh_summary_stats(db: Session, division: str, district: str, upazila: st
         func.lower(func.trim(SummaryStats.upazila)) == func.lower(func.trim(upazila))
     ).first()
 
+    # Get geo IDs
+    from .models import Division, District, Upazila
+    
+    div_obj = db.query(Division).filter(func.lower(Division.name) == func.lower(func.trim(division))).first()
+    dist_obj = db.query(District).filter(func.lower(District.name) == func.lower(func.trim(district))).first()
+    upz_obj = db.query(Upazila).filter(
+        func.lower(Upazila.name) == func.lower(func.trim(upazila)),
+        func.lower(Upazila.district_name) == func.lower(func.trim(district))
+    ).first()
+
+    div_id = div_obj.id if div_obj else None
+    dist_id = dist_obj.id if dist_obj else None
+    upazila_id = upz_obj.id if upz_obj else None
+
     if summary:
         summary.valid = total_valid
         summary.invalid = total_invalid
         summary.total = total_valid + total_invalid
+        summary.division_id = div_id
+        summary.district_id = dist_id
+        summary.upazila_id = upazila_id
         
         # If we have immediate upload results, update those fields too
         if stats_source:
@@ -45,6 +65,9 @@ def refresh_summary_stats(db: Session, division: str, district: str, upazila: st
             summary.version = current_version
         if filename:
             summary.filename = filename
+        # Always update headers if provided (latest upload wins)
+        if column_headers:
+            summary.column_headers = column_headers
     else:
         # Create new summary row if it doesn't exist
         summary = SummaryStats(
@@ -55,7 +78,11 @@ def refresh_summary_stats(db: Session, division: str, district: str, upazila: st
             valid=total_valid,
             invalid=total_invalid,
             version=current_version or 1,
-            filename=filename or "System Refresh"
+            filename=filename or "System Refresh",
+            division_id=div_id,
+            district_id=dist_id,
+            upazila_id=upazila_id,
+            column_headers=column_headers,
         )
         db.add(summary)
     
