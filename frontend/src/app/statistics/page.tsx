@@ -362,8 +362,8 @@ export default function StatisticsPage() {
   }, [filteredEntries]);
 
   return (
-    <main className="min-h-screen p-4 md:p-8 lg:p-12 text-slate-200 flex flex-col">
-      <div className="max-w-7xl mx-auto space-y-8 flex-1 w-full print:hidden">
+    <main className="min-h-screen p-4 md:p-8 text-slate-200 flex flex-col">
+      <div className="max-w-[1600px] mx-auto space-y-8 flex-1 w-full print:hidden">
 
         {/* Header Controls */}
         <header className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
@@ -466,6 +466,21 @@ export default function StatisticsPage() {
         </header>
 
         {error && <div className="p-4 rounded-lg bg-red-500/10 border border-red-500/50 text-red-400">{error}</div>}
+
+        {/* Global Summary Cards - ABOVE the table as requested */}
+        {data && (
+          <DashboardCards 
+            data={{
+              totalQuota: data.entries.reduce((acc, e) => acc + (e.quota || 0), 0),
+              totalValid: data.entries.reduce((acc, e) => acc + (e.valid || 0), 0),
+              remaining: data.entries.reduce((acc, e) => acc + (e.quota || 0), 0) - data.entries.reduce((acc, e) => acc + (e.valid || 0), 0),
+              completionPct: data.entries.reduce((acc, e) => acc + (e.quota || 0), 0) > 0 
+                ? (data.entries.reduce((acc, e) => acc + (e.valid || 0), 0) / data.entries.reduce((acc, e) => acc + (e.quota || 0), 0)) * 100 
+                : 0
+            }}
+            loading={loading}
+          />
+        )}
 
         {/* Statistics Hierarchy Table */}
         {data && data.entries.length > 0 && (

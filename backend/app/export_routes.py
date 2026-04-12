@@ -23,6 +23,7 @@ from .auth import get_current_user
 from .rbac import PermissionChecker
 from .audit import log_audit
 from .pdf_generator import generate_pdf_report
+from .validator import ensure_dob_format
 
 logger = logging.getLogger("ffp")
 router = APIRouter(tags=["export"])
@@ -229,7 +230,18 @@ _UPLOAD_INTERNAL_COLS = frozenset({
     "Extracted_Name", "Card_No", "Master_Serial",
     "Mobile", "Fraud_Reason", "Excel_Row",
     "division_id", "district_id", "upazila_id",
+    # Canonical keys that used to leak into old data JSON
+    "NID", "DOB", "Name", "Division", "District", "Upazila",
+    "Batch_ID", "Source_File", "Cleaned_DOB", "DOB_Year",
 })
+
+# ── Fallback column order if original headers are missing ──
+_FALLBACK_COLUMN_ORDER = [
+    "serial_no", "card_no", "name_bn", "father_husband_name", "dob",
+    "occupation", "address", "ward", "nid_number", "mobile",
+    "spouse_name", "spouse_nid", "spouse_dob", "dealer_name",
+    "dealer_nid", "dealer_mobile", "name_en", "gender", "religion"
+]
 
 # ── Build reverse map: canonical_key → original_header (from header_mapping.json) ──
 def _get_reverse_header_map() -> dict:
@@ -253,44 +265,19 @@ def _get_reverse_header_map() -> dict:
 
 def _restore_original_headers(df: pd.DataFrame, stored_headers: list) -> pd.DataFrame:
     """
-    Rename and reorder DataFrame columns to match the original Excel file exactly.
+    Reorder DataFrame columns to match the original Excel file exactly.
+
+    After the upload pipeline fix, `df` already has the original Bangla column
+    names as keys (stored verbatim in the data JSON). This function only needs
+    to **reorder** them to match `stored_headers` — no reverse-mapping required.
 
     stored_headers: ordered list of original column names from SummaryStats.column_headers.
-    Uses header_mapping.json (inverted) to map canonical DB keys → original headers.
-    Columns present in the DB but absent from stored_headers are dropped.
-    Columns in stored_headers absent from the DB are added as empty columns (preserves layout).
+    Columns in stored_headers absent from the df are added as empty columns (preserves layout).
+    Columns in df that are not in stored_headers are appended at the end.
     """
     if not stored_headers:
-        return df  # Nothing to restore against
+        return df  # Nothing to reorder against
 
-    reverse_map = _get_reverse_header_map()
-
-    # Build canonical → original mapping just for THIS upazila's headers
-    # The stored_headers list IS the truth; we use the reverse map to find the
-    # canonical key for each original header, then rename.
-    # Also build: canonical_key -> original_header for this upazila's set
-    import json as _json
-    import os as _os
-    mapping_path = _os.path.join(_os.path.dirname(__file__), "header_mapping.json")
-    try:
-        with open(mapping_path, "r", encoding="utf-8") as f:
-            fwd_map = _json.load(f)  # original -> canonical
-    except Exception:
-        fwd_map = {}
-
-    # For each stored original header, find what canonical key it was stored under
-    canon_to_orig = {}
-    for orig_header in stored_headers:
-        canon = fwd_map.get(orig_header)
-        if canon and canon not in canon_to_orig:
-            canon_to_orig[canon] = orig_header
-
-    # Rename existing columns that match canonical keys
-    rename_map = {col: canon_to_orig[col] for col in df.columns if col in canon_to_orig}
-    if rename_map:
-        df = df.rename(columns=rename_map)
-
-    # Reorder and fill missing columns to match stored_headers exactly
     result_cols = {}
     for orig_header in stored_headers:
         if orig_header in df.columns:
@@ -298,7 +285,30 @@ def _restore_original_headers(df: pd.DataFrame, stored_headers: list) -> pd.Data
         else:
             result_cols[orig_header] = pd.Series([""] * len(df), dtype=str)
 
+    # Append any extra columns present in df but not listed in stored_headers
+    # (handles edge cases where the file had columns not in the header mapping)
+    for col in df.columns:
+        if col not in result_cols:
+            result_cols[col] = df[col]
+
     return pd.DataFrame(result_cols)
+
+
+def _sort_by_fallback(df: pd.DataFrame) -> pd.DataFrame:
+    """Sort columns by a predefined fallback order for cases where original headers are missing."""
+    existing = set(df.columns)
+    ordered = []
+    
+    # 1. Add columns from fallback order that exist in the DF
+    for col in _FALLBACK_COLUMN_ORDER:
+        if col in existing:
+            ordered.append(col)
+            existing.remove(col)
+            
+    # 2. Add any remaining columns (system columns or extra data)
+    ordered.extend(sorted(list(existing)))
+    
+    return df[ordered]
 
 
 def _build_original_checked_df(valid_data: list, invalid_data: list):
@@ -315,6 +325,9 @@ def _build_original_checked_df(valid_data: list, invalid_data: list):
 
     all_data = list(valid_data) + list(invalid_data)
     df = pd.DataFrame(all_data)
+    
+    # STRICT DOB FORMATTING: Ensure all original DOB-like columns are formatted as YYYY-MM-DD
+    df = ensure_dob_format(df)
 
     def _extract_masks(frame: pd.DataFrame):
         """Build red/yellow index lists from Status column."""
@@ -413,9 +426,9 @@ def upazila_live_export_checked(
     # Restore exact original headers (Bangla column names + original order)
     if stored_headers:
         df = _restore_original_headers(df, stored_headers)
-        # Masks are positional row indices — they survive reordering
     else:
-        logger.warning("No stored column_headers for upazila_id=%s — exporting with canonical keys", upazila_id)
+        logger.warning("No stored column_headers for upazila_id=%s — exporting with fallback sort", upazila_id)
+        df = _sort_by_fallback(df)
 
     safe_name = f"{district}_{upazila}".replace(" ", "_").replace("/", "_") if district and upazila else "upazila"
     os.makedirs("downloads/live", exist_ok=True)
@@ -1125,6 +1138,15 @@ def _generate_standard_csv_task(task_id: str, filter_divisions: list = None,
                 
                 # Combine DB-level geo with JSON data
                 out_row = {h: data.get(h, "") for h in STANDARD_HEADERS}
+                
+                # STRICT DOB FORMATTING for standard CSV
+                for dob_key in ["dob", "spouse_dob"]:
+                    if dob_key in out_row and out_row[dob_key]:
+                        from .validator import clean_dob
+                        cleaned, _ = clean_dob(str(out_row[dob_key]))
+                        if cleaned:
+                            out_row[dob_key] = cleaned
+                
                 out_row["division"] = row.division
                 out_row["district"] = row.district
                 out_row["upazila"] = row.upazila

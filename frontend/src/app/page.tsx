@@ -780,9 +780,9 @@ export default function Home() {
                   <MapPin className="w-6 h-6 text-cyan-400" />
                 </div>
                 <div className="flex flex-wrap gap-x-8 gap-y-1">
-                  <div><span className="text-xs text-slate-500 uppercase tracking-wider">Division</span><p className="text-lg font-semibold text-slate-100">{results.geo.division}</p></div>
-                  <div><span className="text-xs text-slate-500 uppercase tracking-wider">District</span><p className="text-lg font-semibold text-slate-100">{results.geo.district}</p></div>
-                  <div><span className="text-xs text-slate-500 uppercase tracking-wider">Upazila</span><p className="text-lg font-semibold text-slate-100">{results.geo.upazila}</p></div>
+                  <div><span className="text-xs text-slate-500 uppercase tracking-wider">Division</span><p className="text-lg font-semibold text-slate-100">{results.geo?.division || "—"}</p></div>
+                  <div><span className="text-xs text-slate-500 uppercase tracking-wider">District</span><p className="text-lg font-semibold text-slate-100">{results.geo?.district || "—"}</p></div>
+                  <div><span className="text-xs text-slate-500 uppercase tracking-wider">Upazila</span><p className="text-lg font-semibold text-slate-100">{results.geo?.upazila || "—"}</p></div>
                 </div>
               </div>
             )}
@@ -853,16 +853,16 @@ export default function Home() {
                       <td className="px-5 py-4 font-medium text-slate-200">{results.geo?.division || "—"}</td>
                       <td className="px-5 py-4 font-medium text-slate-200">{results.geo?.district || "—"}</td>
                       <td className="px-5 py-4 font-medium text-slate-200">{results.geo?.upazila || "—"}</td>
-                      <td className="px-5 py-4 text-right font-mono text-blue-400 font-semibold">{results.summary.total_rows}</td>
+                      <td className="px-5 py-4 text-right font-mono text-blue-400 font-semibold">{results.summary?.total_rows ?? 0}</td>
                       <td className="px-5 py-4 text-right font-mono text-emerald-400 font-semibold">{results.valid_count}</td>
                       <td className="px-5 py-4 text-right font-mono text-red-400 font-semibold">{results.invalid_count}</td>
                     </tr>
                     {/* Grand Total */}
                     <tr className="bg-slate-800/80 font-bold">
                       <td colSpan={3} className="px-5 py-3 text-slate-300 uppercase text-xs tracking-wider">Grand Total</td>
-                      <td className="px-5 py-3 text-right font-mono text-blue-300">{results.summary.total_rows}</td>
-                      <td className="px-5 py-3 text-right font-mono text-emerald-300">{results.valid_count}</td>
-                      <td className="px-5 py-3 text-right font-mono text-red-300">{results.invalid_count}</td>
+                      <td className="px-5 py-3 text-right font-mono text-blue-300">{results.summary?.total_rows ?? 0}</td>
+                      <td className="px-5 py-3 text-right font-mono text-emerald-300">{results.valid_count ?? 0}</td>
+                      <td className="px-5 py-3 text-right font-mono text-red-300">{results.invalid_count ?? 0}</td>
                     </tr>
                   </tbody>
                 </table>
@@ -877,7 +877,7 @@ export default function Home() {
                 </div>
                 <div>
                   <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">Total Rows</p>
-                  <p className="text-2xl font-bold text-slate-100">{results.summary.total_rows}</p>
+                  <p className="text-2xl font-bold text-slate-100">{results.summary?.total_rows ?? 0}</p>
                 </div>
               </div>
 
@@ -887,7 +887,7 @@ export default function Home() {
                 </div>
                 <div>
                   <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">Valid</p>
-                  <p className="text-2xl font-bold text-slate-100">{results.valid_count}</p>
+                  <p className="text-2xl font-bold text-slate-100">{results.valid_count ?? 0}</p>
                 </div>
               </div>
 
@@ -897,7 +897,7 @@ export default function Home() {
                 </div>
                 <div>
                   <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">Invalid</p>
-                  <p className="text-2xl font-bold text-slate-100">{results.invalid_count}</p>
+                  <p className="text-2xl font-bold text-slate-100">{results.invalid_count ?? 0}</p>
                 </div>
               </div>
 
@@ -907,7 +907,7 @@ export default function Home() {
                 </div>
                 <div>
                   <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">NID Converted</p>
-                  <p className="text-2xl font-bold text-slate-100">{results.summary.converted_nid}</p>
+                  <p className="text-2xl font-bold text-slate-100">{results.summary?.converted_nid ?? 0}</p>
                 </div>
               </div>
             </div>

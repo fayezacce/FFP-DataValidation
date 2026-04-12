@@ -132,10 +132,13 @@ services:
       - DATABASE_URL=postgres://${POSTGRES_USER:-fayez}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-ffp_validator}
       - LISTEN_PORT=6432
       - POOL_MODE=transaction
+      # trust = no password required from internal Docker network.
+      # PostgreSQL's own pg_hba.conf handles the real auth at the DB level.
+      - AUTH_TYPE=trust
       - MAX_CLIENT_CONN=200
       - DEFAULT_POOL_SIZE=20
       - MAX_DB_CONNECTIONS=80
-      - AUTH_TYPE=scram-sha-256
+      - SERVER_RESET_QUERY=DISCARD ALL
     depends_on:
       db:
         condition: service_healthy

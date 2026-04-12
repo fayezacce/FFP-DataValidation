@@ -215,6 +215,29 @@ def resolve_column_name(target: str, available_cols: list) -> str:
             
     return None
 
+
+def ensure_dob_format(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Finds all DOB-related columns and ensures they are in YYYY-MM-DD format.
+    Scans for columns named 'dob', 'spouse_dob', or containing 'birth' or 'জন্ম'.
+    """
+    dob_keywords = ['dob', 'জন্ম', 'birth']
+    df = df.copy()
+    
+    for col in df.columns:
+        col_norm = normalize_col(str(col))
+        if any(kw in col_norm for kw in dob_keywords):
+            # Apply cleaning to every row in this column
+            def _clean_val(v):
+                if pd.isna(v) or v is None:
+                    return ""
+                cleaned, _ = clean_dob(v)
+                return cleaned if cleaned else str(v)
+            
+            df[col] = df[col].apply(_clean_val)
+            
+    return df
+
 def process_dataframe(df: pd.DataFrame, dob_col: str, nid_col: str, header_row: int = 1, tz_limit: int = 0, tz_whitelist: set = None):
     """Processes DataFrame and adds cleaned cols, status, message, and Excel_Row."""
     # NATIVE NORMALIZATION: Replace all columns with canonical mapped names where possible
@@ -342,7 +365,7 @@ def process_dataframe(df: pd.DataFrame, dob_col: str, nid_col: str, header_row: 
             
         if "Duplicate NID" not in str(current_msg):
             messages[pos] = f"{current_msg} and Duplicate NID" if current_msg and current_msg != "nan" else "Duplicate NID"
-    
+
     results['Status'] = statuses
     results['Message'] = messages
 

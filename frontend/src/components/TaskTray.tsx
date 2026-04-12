@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Loader2, CheckCircle2, XCircle, ChevronUp, ChevronDown, Trash2 } from "lucide-react";
+import { Loader2, CheckCircle2, XCircle, ChevronUp, ChevronDown, Trash2, X } from "lucide-react";
 
 interface Task {
   id: string;
@@ -24,6 +24,19 @@ export default function TaskTray() {
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  const handleCancel = async (taskId: string) => {
+    try {
+      const res = await fetchWithAuth(`/api/tasks/${taskId}/cancel`, { method: "POST" });
+      if (res.ok) {
+        setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: "error", message: "Cancelled by user" } : t));
+      } else {
+        alert("Failed to cancel task");
+      }
+    } catch (err) {
+      console.error("Cancel failed", err);
+    }
+  };
 
   useEffect(() => {
     if (!mounted) return;
