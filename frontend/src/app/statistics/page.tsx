@@ -476,7 +476,8 @@ export default function StatisticsPage() {
               remaining: data.entries.reduce((acc, e) => acc + (e.quota || 0), 0) - data.entries.reduce((acc, e) => acc + (e.valid || 0), 0),
               completionPct: data.entries.reduce((acc, e) => acc + (e.quota || 0), 0) > 0 
                 ? (data.entries.reduce((acc, e) => acc + (e.valid || 0), 0) / data.entries.reduce((acc, e) => acc + (e.quota || 0), 0)) * 100 
-                : 0
+                : 0,
+              completedUpazilas: data.entries.filter(e => e.valid >= (e.quota || 0) && (e.quota || 0) > 0 && e.invalid === 0).length
             }}
             loading={loading}
           />

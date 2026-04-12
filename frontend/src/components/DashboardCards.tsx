@@ -8,6 +8,7 @@ interface DashboardCardsProps {
     totalValid: number;
     remaining: number;
     completionPct: number;
+    completedUpazilas: number;
   };
   loading?: boolean;
 }
@@ -47,13 +48,21 @@ const DashboardCards: React.FC<DashboardCardsProps> = ({ data, loading }) => {
       icon: <Percent className="w-5 h-5 text-purple-400" />,
       bg: "bg-purple-500/10",
       border: "border-purple-500/20"
+    },
+    {
+      label: t("completed_upz_title") || "Region Completed",
+      subLabel: t("zero_invalid_status") || "Target met + 0 Errs",
+      value: data.completedUpazilas.toLocaleString("en-IN"),
+      icon: <CheckCircle2 className="w-5 h-5 text-amber-400" />,
+      bg: "bg-amber-500/10",
+      border: "border-amber-500/30 shadow-[0_0_15px_rgba(245,158,11,0.1)]"
     }
   ];
 
   if (loading) {
     return (
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        {[1, 2, 3, 4].map((i) => (
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 mb-8">
+        {[1, 2, 3, 4, 5].map((i) => (
           <div key={i} className="bg-[#121214]/50 border border-slate-800/50 p-6 rounded-2xl animate-pulse h-32"></div>
         ))}
       </div>
@@ -61,7 +70,7 @@ const DashboardCards: React.FC<DashboardCardsProps> = ({ data, loading }) => {
   }
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 mb-8">
       {cards.map((card, i) => (
         <div key={i} className={`bg-[#121214] border ${card.border} p-6 rounded-xl relative overflow-hidden group hover:bg-[#161618] transition-all duration-300 shadow-xl`}>
           <div className="relative z-10 flex flex-col justify-between h-full">
