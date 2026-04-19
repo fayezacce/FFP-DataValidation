@@ -76,6 +76,28 @@ class Upazila(Base):
         Index('ix_upazila_district_name', 'district_name', 'name', unique=True),
     )
 
+class GeoAlias(Base):
+    __tablename__ = "geo_aliases"
+    __table_args__ = (
+        UniqueConstraint('alias_name', 'target_type', 'target_id', name='_alias_target_uc'),
+    )
+    
+    id = Column(Integer, primary_key=True, index=True)
+    alias_name = Column(String, index=True, nullable=False)
+    target_type = Column(String, nullable=False)  # 'division', 'district', 'upazila'
+    target_id = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=_utcnow)
+
+
+class HeaderAlias(Base):
+    __tablename__ = "header_aliases"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    original_header = Column(String, unique=True, index=True, nullable=False) # e.g. "জাতীয় পরিচয়পত্র নম্বর"
+    canonical_key = Column(String, index=True, nullable=False) # e.g. "nid_number"
+    created_at = Column(DateTime, default=_utcnow)
+
+
 class SummaryStats(Base):
     __tablename__ = "summary_stats"
 
@@ -202,6 +224,7 @@ class InvalidRecord(Base):
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     __table_args__ = (
+        Index('ix_invalid_record_district_upazila', 'district', 'upazila'),
         Index('ix_invalid_record_batch', 'upload_batch'),
         Index('ix_invalid_record_batch_id', 'batch_id'),
         Index('ix_invalid_upazila_nid', 'upazila_id', 'nid'),

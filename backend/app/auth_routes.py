@@ -29,6 +29,9 @@ class UserCreate(BaseModel):
     username: str = Field(..., min_length=3, max_length=50, pattern=r'^[a-zA-Z0-9_.-]+$')
     password: str
     role: UserRole = UserRole.viewer
+    division_access: Optional[str] = None
+    district_access: Optional[str] = None
+    upazila_access: Optional[str] = None
 
 import secrets
 from datetime import datetime
@@ -95,7 +98,10 @@ async def create_user(
     new_user = User(
         username=user_in.username,
         hashed_password=hash_password(user_in.password),
-        role=user_in.role
+        role=user_in.role,
+        division_access=user_in.division_access,
+        district_access=user_in.district_access,
+        upazila_access=user_in.upazila_access
     )
     db.add(new_user)
     db.commit()

@@ -90,6 +90,7 @@ async def validate_excel(
     district: str = Form(None),
     upazila: str = Form(None),
     is_correction: bool = Form(False),
+    wipe_before_upload: bool = Form(False),
     db: Session = Depends(get_db),
     background_tasks: BackgroundTasks = None,
     current_user: User = Depends(get_current_user),
@@ -175,7 +176,8 @@ async def validate_excel(
             additional_columns,
             sheet_name,
             is_correction,
-            current_user.id
+            current_user.id,
+            wipe_before_upload,
         )
 
         return {
@@ -197,7 +199,8 @@ def run_validation_task(
     additional_columns: str,
     sheet_name: str,
     is_correction: bool,
-    user_id: int
+    user_id: int,
+    wipe_before_upload: bool = False,
 ):
     """Background task for processing the full Excel validation."""
     db = SessionLocal()
@@ -224,14 +227,19 @@ def run_validation_task(
         original_headers = [str(c) for c in df.columns.tolist()]
         
         # STRICT DOB FORMATTING: Ensure all DOB-like columns in the original DF are formatted as YYYY-MM-DD
-        df = ensure_dob_format(df)
+        df = ensure_dob_format(df, primary_dob_col=dob_column)
 
         # ── CRITICAL: Save raw copy with original Bangla column names BEFORE normalization ──
         # process_dataframe() renames df.columns in-place to canonical keys.
         # We need the original Bangla-keyed data to reconstruct the original file during export.
         raw_df_copy = df.copy()
         
-        processed_df, stats = process_dataframe(df, dob_col=dob_column, nid_col=nid_column, header_row=header_row, tz_limit=tz_limit, tz_whitelist=tz_whitelist)
+        # Fetch dynamic mapping from DB
+        from .models import HeaderAlias
+        aliases = db.query(HeaderAlias).all()
+        header_mapping = {a.original_header: a.canonical_key for a in aliases}
+        
+        processed_df, stats = process_dataframe(df, dob_col=dob_column, nid_col=nid_column, header_row=header_row, tz_limit=tz_limit, tz_whitelist=tz_whitelist, header_mapping=header_mapping)
         # After this call: df.columns == canonical keys (e.g. nid_number, name_bn)
         #                  raw_df_copy.columns == original Bangla headers
 
@@ -240,6 +248,23 @@ def run_validation_task(
         # Geo-match for base filename
         geo = {"division": batch.division, "district": batch.district, "upazila": batch.upazila}
         base_filename = f"{geo['district']}_{geo['upazila']}".replace(" ", "_").replace("/", "_") if geo['district'] else "upload"
+
+        # ── Wipe existing data if requested (single-version mode) ──
+        if wipe_before_upload and geo.get("district") and geo.get("upazila"):
+            logger.info("Wiping existing data for %s / %s before upload", geo["district"], geo["upazila"])
+            db.query(ValidRecord).filter(
+                ValidRecord.district == geo["district"],
+                ValidRecord.upazila == geo["upazila"]
+            ).delete(synchronize_session=False)
+            db.query(InvalidRecord).filter(
+                InvalidRecord.district == geo["district"],
+                InvalidRecord.upazila == geo["upazila"]
+            ).delete(synchronize_session=False)
+            db.query(SummaryStats).filter(
+                SummaryStats.district == geo["district"],
+                SummaryStats.upazila == geo["upazila"]
+            ).delete(synchronize_session=False)
+            db.commit()
 
         # Generate Reports
         pdf_path = generate_pdf_report(processed_df, stats, additional_columns=add_cols, original_filename=base_filename, geo=geo)
@@ -379,6 +404,16 @@ def run_validation_task(
                 "data": data_dict
             })
         if invalid_insert:
+            # ── Delete existing invalid records for this upazila before re-inserting ──
+            # This ensures the upload page count always matches the statistics page
+            # (single-version-per-upazila model: no stacking of old invalid rows).
+            # Skip if wipe_before_upload already cleared them above.
+            if not wipe_before_upload:
+                db.query(InvalidRecord).filter(
+                    InvalidRecord.district == geo["district"],
+                    InvalidRecord.upazila == geo["upazila"]
+                ).delete(synchronize_session=False)
+                db.commit()
             for i in range(0, len(invalid_insert), 2000):
                 db.bulk_insert_mappings(InvalidRecord, invalid_insert[i : i + 2000])
 
@@ -404,6 +439,20 @@ def run_validation_task(
 
         # Refresh summary
         refresh_summary_stats(db, geo["division"], geo["district"], geo["upazila"], filename=batch.filename, stats_source={"total_rows": stats["total_rows"], "valid_count": valid_count, "error_count": error_count, "new_count": new_count, "updated_count": updated_count}, current_version=current_version, column_headers=original_headers)
+        
+        # Log successful completion
+        uploader = db.query(User).filter(User.id == user_id).first()
+        log_audit(
+            db, uploader, 
+            "CREATE", "upload_batch", batch.id, 
+            new_data={
+                "filename": batch.filename,
+                "location": f"{geo['division']} > {geo['district']} > {geo['upazila']}",
+                "total": stats["total_rows"],
+                "valid": valid_count,
+                "invalid": error_count
+            }
+        )
         
         # Sync summary urls
         summary = db.query(SummaryStats).filter(SummaryStats.district == geo["district"], SummaryStats.upazila == geo["upazila"]).first()
@@ -480,11 +529,15 @@ async def preview_validation(
         tz_whitelist = {r[0] for r in tz_whitelist_records}
 
         def read_and_process():
+            from .models import HeaderAlias
+            aliases = db.query(HeaderAlias).all()
+            header_mapping = {a.original_header: a.canonical_key for a in aliases}
+            
             if sheet_name and sheet_name.strip():
                 df = pd.read_excel(io.BytesIO(contents), sheet_name=sheet_name.strip(), header=header_row - 1, nrows=10, dtype=str)
             else:
                 df = pd.read_excel(io.BytesIO(contents), header=header_row - 1, nrows=10, dtype=str)
-            return process_dataframe(df, dob_col=dob_column, nid_col=nid_column, header_row=header_row, tz_limit=tz_limit, tz_whitelist=tz_whitelist)
+            return process_dataframe(df, dob_col=dob_column, nid_col=nid_column, header_row=header_row, tz_limit=tz_limit, tz_whitelist=tz_whitelist, header_mapping=header_mapping)
 
         processed_df, stats = await asyncio.to_thread(read_and_process)
         preview_data = processed_df.replace({float("nan"): None}).to_dict(orient="records")
@@ -496,4 +549,6 @@ async def preview_validation(
 
         return {"preview": preview_data, "summary": stats, "invalid_pct": invalid_pct, "blocked": blocked}
     except Exception as e:
+        import traceback
+        logger.error(f"Preview calculation failed for file {file.filename}: {traceback.format_exc()}")
         raise HTTPException(status_code=400, detail=str(e))

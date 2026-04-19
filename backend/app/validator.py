@@ -13,13 +13,7 @@ import json
 import os
 
 # Load definitive header mapping from DB dump inside the local file
-HEADER_MAPPING = {}
-mapping_path = os.path.join(os.path.dirname(__file__), 'header_mapping.json')
-try:
-    with open(mapping_path, 'r', encoding='utf-8') as f:
-        HEADER_MAPPING = json.load(f)
-except Exception as e:
-    print(f"Warning: Failed to load HEADER_MAPPING: {e}")
+# This is now handled dynamically out of the DB in the route handler.
 
 _BEN_TRANS = str.maketrans(BENGALI_TO_ENGLISH)
 
@@ -216,17 +210,29 @@ def resolve_column_name(target: str, available_cols: list) -> str:
     return None
 
 
-def ensure_dob_format(df: pd.DataFrame) -> pd.DataFrame:
+def ensure_dob_format(df: pd.DataFrame, primary_dob_col: str = None) -> pd.DataFrame:
     """
     Finds all DOB-related columns and ensures they are in YYYY-MM-DD format.
-    Scans for columns named 'dob', 'spouse_dob', or containing 'birth' or 'জন্ম'.
+    Scans for columns explicitly requested, named 'dob', 'spouse_dob', or containing 'birth' or 'জন্ম'.
     """
     dob_keywords = ['dob', 'জন্ম', 'birth']
+    normalized_keywords = [normalize_col(k) for k in dob_keywords if normalize_col(k)]
+    
     df = df.copy()
     
     for col in df.columns:
-        col_norm = normalize_col(str(col))
-        if any(kw in col_norm for kw in dob_keywords):
+        col_str = str(col)
+        col_norm = normalize_col(col_str)
+        
+        is_target = False
+        if primary_dob_col and col_str.strip() == str(primary_dob_col).strip():
+            is_target = True
+        elif any(kw in col_str.lower() for kw in dob_keywords):
+            is_target = True
+        elif any(kw in col_norm for kw in normalized_keywords):
+            is_target = True
+            
+        if is_target:
             # Apply cleaning to every row in this column
             def _clean_val(v):
                 if pd.isna(v) or v is None:
@@ -238,13 +244,16 @@ def ensure_dob_format(df: pd.DataFrame) -> pd.DataFrame:
             
     return df
 
-def process_dataframe(df: pd.DataFrame, dob_col: str, nid_col: str, header_row: int = 1, tz_limit: int = 0, tz_whitelist: set = None):
+def process_dataframe(df: pd.DataFrame, dob_col: str, nid_col: str, header_row: int = 1, tz_limit: int = 0, tz_whitelist: set = None, header_mapping: dict = None):
     """Processes DataFrame and adds cleaned cols, status, message, and Excel_Row."""
+    if header_mapping is None:
+        header_mapping = {}
+        
     # NATIVE NORMALIZATION: Replace all columns with canonical mapped names where possible
     new_cols = []
     for c in df.columns:
         c_clean = str(c).strip()
-        new_cols.append(HEADER_MAPPING.get(c_clean, c_clean))
+        new_cols.append(header_mapping.get(c_clean, c_clean))
     df.columns = new_cols
     
     results = df.copy()
@@ -285,13 +294,24 @@ def process_dataframe(df: pd.DataFrame, dob_col: str, nid_col: str, header_row: 
     
     stats = {"total_rows": n, "issues": 0, "converted_nid": 0}
     
-    # Use itertuples for ~10x speedup over iterrows
-    dob_col_idx = df.columns.get_loc(dob_col)
-    nid_col_idx = df.columns.get_loc(nid_col)
-    name_col_idx = df.columns.get_loc(name_col) if name_col else -1
-    card_col_idx = df.columns.get_loc(card_col) if card_col else -1
-    serial_col_idx = df.columns.get_loc(serial_col) if serial_col else -1
-    mobile_col_idx = df.columns.get_loc(mobile_col) if mobile_col else -1
+    def _safe_get_loc(col_name):
+        loc = df.columns.get_loc(col_name)
+        if isinstance(loc, int):
+            return loc
+        if isinstance(loc, slice):
+            return loc.start
+        import numpy as np
+        loc_arr = np.asarray(loc)
+        if loc_arr.dtype == bool or loc_arr.dtype == np.bool_:
+            return int(loc_arr.argmax())
+        return int(loc_arr[0])
+
+    dob_col_idx = _safe_get_loc(dob_col)
+    nid_col_idx = _safe_get_loc(nid_col)
+    name_col_idx = _safe_get_loc(name_col) if name_col else -1
+    card_col_idx = _safe_get_loc(card_col) if card_col else -1
+    serial_col_idx = _safe_get_loc(serial_col) if serial_col else -1
+    mobile_col_idx = _safe_get_loc(mobile_col) if mobile_col else -1
     
     for i, tup in enumerate(df.itertuples(index=True)):
         idx = tup[0]  # original df index

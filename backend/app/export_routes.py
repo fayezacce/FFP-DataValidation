@@ -172,6 +172,7 @@ def upazila_live_export_invalid(
         media = "application/pdf"
         dl_name = f"{safe_name}_live_invalid.pdf"
     else:
+        df = ensure_dob_format(df)
         path = os.path.join("downloads", "live", f"{safe_name}_live_invalid.xlsx")
         save_live_excel_nikosh(df, path, "Invalid Records", is_valid=False)
         media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -215,6 +216,7 @@ def upazila_live_export(
         media = "application/pdf"
         dl_name = f"{safe_name}_live_valid.pdf"
     else:
+        df = ensure_dob_format(df)
         path = os.path.join("downloads", "live", f"{safe_name}_live_valid.xlsx")
         save_live_excel_nikosh(df, path, "Valid Records", is_valid=True)
         media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -243,55 +245,47 @@ _FALLBACK_COLUMN_ORDER = [
     "dealer_nid", "dealer_mobile", "name_en", "gender", "religion"
 ]
 
-# ── Build reverse map: canonical_key → original_header (from header_mapping.json) ──
-def _get_reverse_header_map() -> dict:
-    """Invert header_mapping.json so we can rename canonical keys back to original headers."""
-    import json as _json
-    import os as _os
-    mapping_path = _os.path.join(_os.path.dirname(__file__), "header_mapping.json")
-    try:
-        with open(mapping_path, "r", encoding="utf-8") as f:
-            mapping = _json.load(f)
-        # mapping: {original_header: canonical_key}
-        # Invert: {canonical_key: first_original_header_that_maps_to_it}
-        reverse = {}
-        for orig, canon in mapping.items():
-            if canon not in reverse:
-                reverse[canon] = orig
-        return reverse
-    except Exception:
-        return {}
+# removed _get_reverse_header_map
 
 
-def _restore_original_headers(df: pd.DataFrame, stored_headers: list) -> pd.DataFrame:
+def _restore_original_headers(df: pd.DataFrame, stored_headers: list, forward_map: dict) -> pd.DataFrame:
     """
-    Reorder DataFrame columns to match the original Excel file exactly.
+    Restore exact column names and order from the original uploaded Excel file.
 
-    After the upload pipeline fix, `df` already has the original Bangla column
-    names as keys (stored verbatim in the data JSON). This function only needs
-    to **reorder** them to match `stored_headers` — no reverse-mapping required.
+    The DB data JSON uses canonical keys ('nid_number', 'name_bn', etc.).
+    stored_headers has the EXACT original Bangla strings from the uploaded file.
 
-    stored_headers: ordered list of original column names from SummaryStats.column_headers.
-    Columns in stored_headers absent from the df are added as empty columns (preserves layout).
-    Columns in df that are not in stored_headers are appended at the end.
+    Correct direction:
+      For each stored_header string, find its canonical key in the FORWARD map,
+      then rename that canonical column back to the stored_header.
+
+      stored_header = 'জাতীয় পরিচয়পত্র নম্বর'
+      forward_map['জাতীয় পরিচয়পত্র নম্বর'] = 'nid_number'
+      df['nid_number'] → renamed to 'জাতীয় পরিচয়পত্র নম্বর'
     """
     if not stored_headers:
-        return df  # Nothing to reorder against
+        return df
 
+    # Build rename: {canonical_col_in_df → stored_header_bangla}
+    # Use .strip() on the lookup key to handle trailing whitespace in stored headers
+    rename = {}
+    used_canonicals = set()
+    for stored_header in stored_headers:
+        canonical = forward_map.get(stored_header) or forward_map.get(stored_header.strip())
+        if canonical and canonical in df.columns and canonical not in used_canonicals:
+            rename[canonical] = stored_header
+            used_canonicals.add(canonical)
+
+    if rename:
+        df = df.rename(columns=rename)
+
+    # Reorder + pad to exactly match stored_headers; all system cols dropped silently
     result_cols = {}
-    for orig_header in stored_headers:
-        if orig_header in df.columns:
-            result_cols[orig_header] = df[orig_header]
-        else:
-            result_cols[orig_header] = pd.Series([""] * len(df), dtype=str)
-
-    # Append any extra columns present in df but not listed in stored_headers
-    # (handles edge cases where the file had columns not in the header mapping)
-    for col in df.columns:
-        if col not in result_cols:
-            result_cols[col] = df[col]
+    for h in stored_headers:
+        result_cols[h] = df[h] if h in df.columns else pd.Series([""] * len(df), dtype=str)
 
     return pd.DataFrame(result_cols)
+
 
 
 def _sort_by_fallback(df: pd.DataFrame) -> pd.DataFrame:
@@ -425,10 +419,15 @@ def upazila_live_export_checked(
 
     # Restore exact original headers (Bangla column names + original order)
     if stored_headers:
-        df = _restore_original_headers(df, stored_headers)
+        from .models import HeaderAlias
+        aliases = db.query(HeaderAlias).all()
+        forward_map = {a.original_header: a.canonical_key for a in aliases}
+        df = _restore_original_headers(df, stored_headers, forward_map)
     else:
         logger.warning("No stored column_headers for upazila_id=%s — exporting with fallback sort", upazila_id)
         df = _sort_by_fallback(df)
+
+    df = ensure_dob_format(df)
 
     safe_name = f"{district}_{upazila}".replace(" ", "_").replace("/", "_") if district and upazila else "upazila"
     os.makedirs("downloads/live", exist_ok=True)
@@ -723,6 +722,10 @@ def _generate_zip_common(task_id: str, mode: str, filter_divisions: list = None,
         total_entries = len(entries)
         upazila_id_list = [e.upazila_id for e in entries if e.upazila_id]
 
+        from .models import HeaderAlias
+        aliases = db.query(HeaderAlias).all()
+        forward_map = {a.original_header: a.canonical_key for a in aliases}
+
         # ── Step 2 & 3: Group by District and Batch Fetch ──
         temp_dir = os.path.join("downloads", f"temp_zip_{task_id}")
         os.makedirs(temp_dir, exist_ok=True)
@@ -756,8 +759,9 @@ def _generate_zip_common(task_id: str, mode: str, filter_divisions: list = None,
                 # Restore original headers if available
                 stored_headers = unit_data.get("column_headers")
                 if stored_headers:
-                    df = _restore_original_headers(df, stored_headers)
+                    df = _restore_original_headers(df, stored_headers, forward_map)
 
+                df = ensure_dob_format(df)
                 tested_path = os.path.join(temp_dir, f"{safe_base}_tested.xlsx")
                 _write_checked_xlsx(df, invalid_mask, tested_path, warning_mask=warning_mask)
                 results.append((tested_path, f"{div_name}/{safe_base}_tested.xlsx"))
@@ -789,14 +793,16 @@ def _generate_zip_common(task_id: str, mode: str, filter_divisions: list = None,
                 if u_v is None or (hasattr(u_v, 'empty') and u_v.empty): return None
                 from .export_routes import _export_cols
                 export_df = _export_cols(u_v)
+                export_df = ensure_dob_format(export_df)
                 t_file = os.path.join(temp_dir, f"{safe_base}_valid.xlsx")
                 save_live_excel_nikosh(export_df, t_file, "Valid Records", is_valid=True)
                 results.append((t_file, f"{div_name}/{safe_base}_valid.xlsx"))
 
             elif mode == "invalid":
                 if u_i is None or (hasattr(u_i, 'empty') and u_i.empty): return None
+                u_i_formatted = ensure_dob_format(u_i)
                 t_file = os.path.join(temp_dir, f"{safe_base}_invalid.xlsx")
-                save_live_excel_nikosh(u_i, t_file, "Invalid Records", is_valid=False)
+                save_live_excel_nikosh(u_i_formatted, t_file, "Invalid Records", is_valid=False)
                 results.append((t_file, f"{div_name}/{safe_base}_invalid.xlsx"))
                 # PDF
                 idf_pdf = u_i.copy()
@@ -822,35 +828,52 @@ def _generate_zip_common(task_id: str, mode: str, filter_divisions: list = None,
 
                     # 1. Bulk Fetch for whole district
                     uids = [e.upazila_id for e in sub_entries if e.upazila_id]
+                    no_ids = [e for e in sub_entries if not e.upazila_id]
                     dist_v_df = pd.DataFrame()
                     dist_i_df = pd.DataFrame()
 
-                    # For checked mode: fetch raw data JSONB (original columns) grouped by upazila_id
-                    dist_raw_valid = {}   # upazila_id -> list of data dicts
-                    dist_raw_invalid = {} # upazila_id -> list of data dicts
+                    # For checked mode: fetch raw data JSONB (original columns)
+                    dist_raw_valid = {}   
+                    dist_raw_invalid = {} 
 
-                    if mode == "checked" and uids:
+                    if mode == "checked":
                         import json as _json
-
                         def _parse(d):
                             if isinstance(d, str):
                                 try: return _json.loads(d)
                                 except: return {}
                             return d or {}
 
-                        raw_v = db.execute(
-                            text("SELECT upazila_id, data FROM valid_records WHERE upazila_id = ANY(:uids)"),
-                            {"uids": uids}
-                        ).fetchall()
-                        raw_i = db.execute(
-                            text("SELECT upazila_id, data FROM invalid_records WHERE upazila_id = ANY(:uids)"),
-                            {"uids": uids}
-                        ).fetchall()
-
-                        for uid, d in raw_v:
-                            dist_raw_valid.setdefault(uid, []).append(_parse(d))
-                        for uid, d in raw_i:
-                            dist_raw_invalid.setdefault(uid, []).append(_parse(d))
+                        # Bulk fetch for perfectly mapped upazilas
+                        if uids:
+                            raw_v = db.execute(
+                                text("SELECT upazila_id, data FROM valid_records WHERE upazila_id = ANY(:uids)"),
+                                {"uids": uids}
+                            ).fetchall()
+                            raw_i = db.execute(
+                                text("SELECT upazila_id, data FROM invalid_records WHERE upazila_id = ANY(:uids)"),
+                                {"uids": uids}
+                            ).fetchall()
+                            for uid, d in raw_v:
+                                dist_raw_valid.setdefault(uid, []).append(_parse(d))
+                            for uid, d in raw_i:
+                                dist_raw_invalid.setdefault(uid, []).append(_parse(d))
+                        
+                        # Fallback query for orphaned unmapped upazilas using entry.id as a pseudo-key
+                        if no_ids:
+                            for entry in no_ids:
+                                raw_v = db.execute(
+                                    text("SELECT :uid, data FROM valid_records WHERE division = :div AND district = :dist AND upazila = :upz"),
+                                    {"uid": entry.id, "div": entry.division, "dist": entry.district, "upz": entry.upazila}
+                                ).fetchall()
+                                raw_i = db.execute(
+                                    text("SELECT :uid, data FROM invalid_records WHERE division = :div AND district = :dist AND upazila = :upz"),
+                                    {"uid": entry.id, "div": entry.division, "dist": entry.district, "upz": entry.upazila}
+                                ).fetchall()
+                                for uid, d in raw_v:
+                                    dist_raw_valid.setdefault(uid, []).append(_parse(d))
+                                for uid, d in raw_i:
+                                    dist_raw_invalid.setdefault(uid, []).append(_parse(d))
 
                     if mode in ("valid", "invalid"):  # checked uses raw path above
                         if need_valid:
@@ -861,10 +884,48 @@ def _generate_zip_common(task_id: str, mode: str, filter_divisions: list = None,
                     # 2. Slice and parallelize upazilas in this district
                     futures = []
                     for entry in sub_entries:
-                        # For checked mode: use raw data dicts keyed by upazila_id
+                        # For checked mode: use raw data dicts keyed by upazila_id or entry.id (fallback)
                         if mode == "checked":
-                            raw_v_slice = dist_raw_valid.get(entry.upazila_id, [])
-                            raw_i_slice = dist_raw_invalid.get(entry.upazila_id, [])
+                            key = entry.upazila_id if entry.upazila_id else entry.id
+                            raw_v_slice = dist_raw_valid.get(key, [])
+                            raw_i_slice = dist_raw_invalid.get(key, [])
+
+                            # ── upazila_id mismatch fallback ─────────────────────────────────
+                            # The bulk fetch above uses integer upazila_id. It silently misses
+                            # records where upazila_id is either NULL (never backfilled) or holds
+                            # a WRONG value (uploaded with stale/renamed geo, then backfill was
+                            # not run, or a rename changed the canonical ID).
+                            # If the ID-based slice is empty but SummaryStats says data exists,
+                            # re-query by text name (no upazila_id filter) as the authoritative
+                            # source of truth. Deduplication is not needed because the ID path
+                            # already returned nothing for this upazila.
+                            if not raw_i_slice and entry.invalid and entry.invalid > 0:
+                                fallback_i = db.execute(
+                                    text("SELECT data FROM invalid_records"
+                                         " WHERE LOWER(TRIM(district)) = LOWER(TRIM(:dist))"
+                                         " AND LOWER(TRIM(upazila)) = LOWER(TRIM(:upz))"),
+                                    {"dist": entry.district, "upz": entry.upazila}
+                                ).fetchall()
+                                raw_i_slice = [_parse(d) for (d,) in fallback_i]
+                                if raw_i_slice:
+                                    logger.info("ZIP checked fallback: found %d invalid rows for %s via text-match (upazila_id mismatch)",
+                                                len(raw_i_slice), entry.upazila)
+                                else:
+                                    logger.warning("ZIP checked: STALE STATS — SummaryStats.invalid=%d for %s/%s (upazila_id=%s) but 0 rows found in invalid_records by both ID and text-match. Run 'Refresh All Stats' to fix.",
+                                                   entry.invalid, entry.district, entry.upazila, entry.upazila_id)
+
+                            if not raw_v_slice and entry.valid and entry.valid > 0:
+                                fallback_v = db.execute(
+                                    text("SELECT data FROM valid_records"
+                                         " WHERE LOWER(TRIM(district)) = LOWER(TRIM(:dist))"
+                                         " AND LOWER(TRIM(upazila)) = LOWER(TRIM(:upz))"),
+                                    {"dist": entry.district, "upz": entry.upazila}
+                                ).fetchall()
+                                raw_v_slice = [_parse(d) for (d,) in fallback_v]
+                                if raw_v_slice:
+                                    logger.info("ZIP checked fallback: found %d valid rows for %s via text-match (upazila_id mismatch)",
+                                                len(raw_v_slice), entry.upazila)
+
                             u_v = raw_v_slice
                             u_i = raw_i_slice
                         else:
@@ -918,30 +979,13 @@ def _generate_zip_common(task_id: str, mode: str, filter_divisions: list = None,
         task.error_details = str(e)[:500]
         task.message = f"Failed to create {mode} zip"
         db.commit()
-
-        if not os.path.exists(zip_path) or os.path.getsize(zip_path) < 100:
-            if os.path.exists(zip_path):
-                os.remove(zip_path)
-            raise Exception("Zip file generation failed or produced an empty file")
-
-        task.progress = 100
-        task.status = "completed"
-        task.message = f"{mode_label.title()} zip generated successfully"
-        task.result_url = f"/api/export/download/{urllib.parse.quote(zip_filename)}"
-        db.commit()
-
-    except Exception as e:
-        logger.error(f"{mode}-zip generation failed: {str(e)}")
-        task.status = "error"
-        task.error_details = str(e)[:500]
-        task.message = f"Failed to create {mode} zip"
-        db.commit()
     finally:
         temp_dir = os.path.join("downloads", f"temp_zip_{task_id}")
         if os.path.exists(temp_dir):
             import shutil
             shutil.rmtree(temp_dir, ignore_errors=True)
         db.close()
+
 
 
 # ── Endpoint wrappers ────────────────────────────────────────────────────────
@@ -1252,8 +1296,8 @@ def export_standard_csv(
 
 def _write_checked_xlsx(export_df: pd.DataFrame, invalid_mask, path: str, warning_mask=None):
     """Write a single Excel file with Nikosh font and highlighted rows.
-    Red: Invalid/Error (invalid_mask)
-    Yellow: Converted NID/Warning (warning_mask)
+    Headers use the original uploaded column names (Bangla).
+    Red rows: Invalid records. Yellow rows: Converted NID / warnings.
     Uses xlsxwriter for high performance.
     """
     with pd.ExcelWriter(path, engine="xlsxwriter") as writer:
@@ -1261,7 +1305,14 @@ def _write_checked_xlsx(export_df: pd.DataFrame, invalid_mask, path: str, warnin
         workbook = writer.book
         worksheet = writer.sheets["All Records"]
 
+        # Base Nikosh format for all data cells
         fmt_nikosh = workbook.add_format({"font_name": "Nikosh", "font_size": 11})
+        # Header row format — bold Nikosh with a subtle background
+        fmt_header = workbook.add_format({
+            "font_name": "Nikosh", "font_size": 11, "bold": True,
+            "bg_color": "#D9E1F2", "border": 1,
+            "text_wrap": True, "valign": "vcenter",
+        })
         fmt_red = workbook.add_format({
             "font_name": "Nikosh", "font_size": 11,
             "bg_color": "#FFCCCC",  # Light Red
@@ -1272,20 +1323,26 @@ def _write_checked_xlsx(export_df: pd.DataFrame, invalid_mask, path: str, warnin
         })
 
         num_cols = len(export_df.columns)
-        
-        # Apply Nikosh to entire range first
-        worksheet.set_column(0, num_cols - 1, 15, fmt_nikosh)
+
+        # Apply Nikosh to all data columns
+        worksheet.set_column(0, num_cols - 1, 18, fmt_nikosh)
+
+        # Explicitly write the header row with the Nikosh header format
+        for col_idx, col_name in enumerate(export_df.columns):
+            worksheet.write(0, col_idx, col_name, fmt_header)
+
+        # Set header row height for wrapped Bangla text
+        worksheet.set_row(0, 30, fmt_header)
 
         # Highlight invalid rows in Red
         if invalid_mask:
             for row_idx in invalid_mask:
-                # row_idx + 1 because of header
                 worksheet.set_row(row_idx + 1, None, fmt_red)
-        
+
         # Highlight warnings in Yellow
         if warning_mask:
             for row_idx in warning_mask:
                 worksheet.set_row(row_idx + 1, None, fmt_yellow)
 
-        # Freeze header
+        # Freeze header row
         worksheet.freeze_panes(1, 0)

@@ -116,6 +116,9 @@ run_task "Mobile number backfill" "/app/app/scripts/backfill_columns.py"
 # 5c. Summary stats sync
 run_task "Summary stats sync" "/app/app/scripts/sync_all_stats.py"
 
+# 5d. Repair Stale Geo IDs
+run_task "Repair stale geo IDs" "/app/app/scripts/repair_geo_ids_prod.py"
+
 # ── Step 6: Restart Services ───────────────────────────────────────────────
 info "--- Step 6: Restarting Services ---"
 docker compose -f "$COMPOSE_FILE" up -d "$BACKEND_SERVICE" frontend

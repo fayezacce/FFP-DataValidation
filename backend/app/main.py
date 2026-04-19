@@ -40,45 +40,61 @@ async def lifespan(app: FastAPI):
     os.makedirs("uploads", exist_ok=True)
 
     # Enable extensions and create tables
-    db_init = SessionLocal()
-    try:
-        db_init.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
-        db_init.commit()
-    except Exception as e:
-        logger.warning(f"pg_trgm extension: {e}")
-        db_init.rollback()
-    finally:
-        db_init.close()
+    # Adding a retry loop for DB startup resilience
+    import time
+    from sqlalchemy.exc import OperationalError
+    
+    max_retries = 10
+    retry_delay = 2
+    for attempt in range(max_retries):
+        try:
+            db_init = SessionLocal()
+            db_init.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+            db_init.commit()
+            db_init.close()
+            
+            Base.metadata.create_all(bind=engine)
+            
+            db = SessionLocal()
+            migrate_schema(db)
+            _migrate_json_to_db(db)
+            
+            # Seed default admin if no users exist
+            if db.query(User).count() == 0:
+                admin_user = User(username="admin", hashed_password=hash_password("admin123"), role="admin")
+                db.add(admin_user)
+                db.commit()
+                logger.warning("Default admin user created: admin / admin123 — CHANGE IT IMMEDIATELY!")
+            else:
+                admin = db.query(User).filter(User.username == "admin").first()
+                if admin and verify_password("admin123", admin.hashed_password):
+                    if db.query(ValidRecord).count() > 0:
+                        app.state.security_lockout = True
+                        logger.critical("SECURITY LOCKOUT — default admin password is active AND data exists. Upload endpoints disabled.")
+                    else:
+                        logger.warning("Default admin password 'admin123' is still active!")
 
-    Base.metadata.create_all(bind=engine)
+            _seed_geo_data_if_empty(db)
+            _seed_permissions_if_empty(db)
+            _sync_geo_aliases(db)
+            _sync_header_aliases(db)
 
-    db = SessionLocal()
-    try:
-        migrate_schema(db)
-        _migrate_json_to_db(db)
-
-        # Seed default admin if no users exist
-        if db.query(User).count() == 0:
-            admin_user = User(username="admin", hashed_password=hash_password("admin123"), role="admin")
-            db.add(admin_user)
-            db.commit()
-            logger.warning("Default admin user created: admin / admin123 — CHANGE IT IMMEDIATELY!")
-        else:
-            admin = db.query(User).filter(User.username == "admin").first()
-            if admin and verify_password("admin123", admin.hashed_password):
-                if db.query(ValidRecord).count() > 0:
-                    app.state.security_lockout = True
-                    logger.critical("SECURITY LOCKOUT — default admin password is active AND data exists. Upload endpoints disabled.")
-                else:
-                    logger.warning("Default admin password 'admin123' is still active!")
-
-        _seed_geo_data_if_empty(db)
-        _seed_permissions_if_empty(db)
-
-        from . import bd_geo
-        bd_geo.load_geo_data_from_db(db)
-    finally:
-        db.close()
+            from . import bd_geo
+            bd_geo.load_geo_data_from_db(db)
+            db.close()
+            
+            logger.info("Database initialized successfully.")
+            break
+        except OperationalError as e:
+            if attempt < max_retries - 1:
+                logger.warning(f"Database connection failed (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {retry_delay}s...")
+                time.sleep(retry_delay)
+            else:
+                logger.error(f"Could not connect to database after {max_retries} attempts. Exiting.")
+                raise e
+        except Exception as e:
+            logger.error(f"Unexpected error during application startup: {e}")
+            raise e
 
     yield
 
@@ -139,6 +155,10 @@ def migrate_schema(db: Session):
             # CRITICAL PERFORMANCE INDEX for statistics dashboard
             idx_upz_name = f"ix_{table}_upazila_id"
             db.execute(text(f"CREATE INDEX IF NOT EXISTS {idx_upz_name} ON {table} (upazila_id)"))
+            
+            # Composite index for stats recalculation queries (district, upazila)
+            idx_dist_upz = f"ix_{table}_district_upazila"
+            db.execute(text(f"CREATE INDEX IF NOT EXISTS {idx_dist_upz} ON {table} (district, upazila)"))
             
             db.commit()
         except Exception:
@@ -234,14 +254,18 @@ def migrate_schema(db: Session):
             except Exception:
                 db.rollback()
 
-    # Preserve original excel column headers per upazila and per batch
-    for table in ["summary_stats", "upload_batches"]:
-        try:
-            db.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS column_headers JSON"))
-            db.commit()
-            logger.info(f"Migrated: added column_headers to {table}")
-        except Exception:
-            db.rollback()
+    # Handle GeoAlias constraint migration (from global unique to composite unique)
+    try:
+        # Postgres often names unique constraints as {table}_{col}_key
+        db.execute(text("ALTER TABLE geo_aliases DROP CONSTRAINT IF EXISTS geo_aliases_alias_name_key"))
+        # Drop index created by unique=True
+        db.execute(text("DROP INDEX IF EXISTS ix_geo_aliases_alias_name"))
+        # Create new composite unique constraint
+        db.execute(text("ALTER TABLE geo_aliases ADD CONSTRAINT _alias_target_uc UNIQUE (alias_name, target_type, target_id)"))
+        db.commit()
+        logger.info("Migrated geo_aliases to composite unique constraint.")
+    except Exception:
+        db.rollback()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -297,7 +321,7 @@ def _seed_permissions_if_empty(db: Session):
 
             role_map = {
                 "admin": [p[0] for p in perms],
-                "uploader": ["upload_data"],
+                "uploader": ["upload_data", "view_stats", "view_geo"],
                 "viewer": ["view_stats", "view_geo"],
             }
             for role, pnames in role_map.items():
@@ -308,6 +332,135 @@ def _seed_permissions_if_empty(db: Session):
     except Exception as e:
         db.rollback()
         logger.error(f"Error seeding permissions: {e}")
+
+
+def _sync_geo_aliases(db: Session):
+    """Sync hardcoded aliases from bd_geo.py into the geo_aliases table."""
+    from .models import GeoAlias, District, Division, SystemConfig
+    try:
+        # OPTIMIZATION: Check if sync has already been completed persistently
+        sync_flag = db.query(SystemConfig).filter(SystemConfig.key == "geo_aliases_synced_v1").first()
+        if sync_flag and sync_flag.value == "true":
+            return
+
+        # Pre-defined aliases from system defaults logic
+        dist_aliases = {
+            "Cumilla": ["Comilla", "Kumilla"],
+            "Chattogram": ["Chittagong", "CTG"],
+            "Coxsbazar": ["Cox's Bazar", "Coxs Bazar"],
+            "Khagrachhari": ["Khagrachari"],
+            "Bogura": ["Bogra"],
+            "Chapainawabganj": ["Chapai Nawabganj", "Chapai"],
+            "Jashore": ["Jessore"],
+            "Jhenaidah": ["Jhenaidaha"],
+            "Jhalokati": ["Jhalokathi", "Jhalakathi"],
+            "Barishal": ["Barisal"],
+            "Moulvibazar": ["Maulvibazar"],
+            "Netrakona": ["Netrokona"],
+        }
+        
+        div_aliases = {
+            "Barishal": ["Barisal"],
+            "Chattogram": ["Chittagong"]
+        }
+
+        created_count = 0
+        updated_count = 0
+        
+        # 1. Sync District Aliases
+        for target_name, aliases in dist_aliases.items():
+            district = db.query(District).filter(District.name.ilike(target_name)).first()
+            
+            if district:
+                for alias_name in aliases:
+                    # Case-insensitive check for existing alias for this specific target
+                    existing = db.query(GeoAlias).filter(
+                        GeoAlias.target_type == "district",
+                        GeoAlias.target_id == district.id,
+                        GeoAlias.alias_name.ilike(alias_name)
+                    ).first()
+                    
+                    if not existing:
+                        db.add(GeoAlias(
+                            target_type="district",
+                            target_id=district.id,
+                            alias_name=alias_name
+                        ))
+                        created_count += 1
+                        
+        # 2. Sync Division Aliases
+        for target_name, aliases in div_aliases.items():
+            division = db.query(Division).filter(Division.name.ilike(target_name)).first()
+                
+            if division:
+                for alias_name in aliases:
+                    existing = db.query(GeoAlias).filter(
+                        GeoAlias.target_type == "division",
+                        GeoAlias.target_id == division.id,
+                        GeoAlias.alias_name.ilike(alias_name)
+                    ).first()
+                    
+                    if not existing:
+                        db.add(GeoAlias(
+                            target_type="division",
+                            target_id=division.id,
+                            alias_name=alias_name
+                        ))
+                        created_count += 1
+        
+        if created_count > 0:
+            db.commit()
+            logger.info(f"Synchronized {created_count} geographic aliases from system defaults.")
+        
+        # Mark as completed
+        if not sync_flag:
+            db.add(SystemConfig(key="geo_aliases_synced_v1", value="true", description="Initial geo aliases seed completed"))
+            db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error syncing geo aliases: {e}")
+
+
+def _sync_header_aliases(db: Session):
+    """Sync hardcoded aliases from header_mapping.json into the header_aliases table."""
+    from .models import HeaderAlias, SystemConfig
+    try:
+        # OPTIMIZATION: Check if sync has already been completed persistently
+        sync_flag = db.query(SystemConfig).filter(SystemConfig.key == "header_aliases_synced_v1").first()
+        if sync_flag and sync_flag.value == "true":
+            return
+
+        mapping_path = os.path.join(os.path.dirname(__file__), "header_mapping.json")
+        if os.path.exists(mapping_path):
+            with open(mapping_path, "r", encoding="utf-8") as f:
+                mapping = json.load(f)
+            
+            created_count = 0
+            # Get all existing headers in one go for efficiency
+            existing_headers = {h[0] for h in db.query(HeaderAlias.original_header).all()}
+            
+            for original_header, canonical_key in mapping.items():
+                if original_header not in existing_headers:
+                    db.add(HeaderAlias(
+                        original_header=original_header,
+                        canonical_key=canonical_key
+                    ))
+                    existing_headers.add(original_header) 
+                    created_count += 1
+            
+            if created_count > 0:
+                db.commit()
+                logger.info(f"Synchronized {created_count} new header aliases from JSON mapping to database.")
+            
+            # Mark as completed
+            if not sync_flag:
+                db.add(SystemConfig(key="header_aliases_synced_v1", value="true", description="Initial header alias seed completed"))
+                db.commit()
+            else:
+                logger.info("Header aliases are already up-to-date with JSON mapping.")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error syncing header aliases from JSON: {e}")
 
 
 def _migrate_json_to_db(db: Session):
@@ -454,6 +607,7 @@ from . import task_routes
 from . import sync_routes
 from . import geo_routes
 from . import audit_routes
+from . import alias_routes
 
 # API Routes v2.0 (Modular)
 app.include_router(auth_routes.router, prefix="/auth")
@@ -467,6 +621,7 @@ app.include_router(task_routes.router, prefix="/tasks", tags=["tasks"])
 app.include_router(sync_routes.router, prefix="/sync", tags=["sync"])
 app.include_router(geo_routes.router, prefix="/geo", tags=["geo"])
 app.include_router(audit_routes.router, prefix="/audit", tags=["audit"])
+app.include_router(alias_routes.router)  # prefix is defined inside the router
 
 
 # ─────────────────────────────────────────────────────────────────────────────

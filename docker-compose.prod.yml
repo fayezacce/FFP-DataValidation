@@ -71,8 +71,11 @@ services:
     volumes:
       - backend_downloads:/app/downloads
       - backend_uploads:/app/uploads
+      - ./db_backups:/app/backups
     depends_on:
       db:
+        condition: service_healthy
+      pgbouncer:
         condition: service_healthy
     networks:
       - app_network
@@ -80,8 +83,8 @@ services:
       test: [ "CMD-SHELL", "wget -qO- http://localhost:8000/health || exit 1" ]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 20s
+      retries: 6
+      start_period: 15s
     deploy:
       resources:
         limits:
@@ -134,11 +137,18 @@ services:
       - POOL_MODE=transaction
       # trust = no password required from internal Docker network.
       # PostgreSQL's own pg_hba.conf handles the real auth at the DB level.
-      - AUTH_TYPE=trust
+      - AUTH_TYPE=scram-sha-256
       - MAX_CLIENT_CONN=200
       - DEFAULT_POOL_SIZE=20
       - MAX_DB_CONNECTIONS=80
       - SERVER_RESET_QUERY=DISCARD ALL
+    healthcheck:
+      # Use pg_isready to probe the pgbouncer port
+      test: ["CMD-SHELL", "pg_isready -p 6432 -h localhost -U ${POSTGRES_USER:-fayez}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
     depends_on:
       db:
         condition: service_healthy

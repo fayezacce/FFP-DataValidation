@@ -254,7 +254,7 @@ const StatsTable: React.FC<StatsTableProps> = ({
                                 <div className="w-[1px] bg-slate-800 mx-1"></div>
 
                                 <button 
-                                  disabled={!!downloadingId}
+                                  disabled={!!downloadingId || !upz.invalid}
                                   onClick={() => {
                                     const id = `${upz.id}-invalid`;
                                     downloadFileWithAuth(
@@ -265,9 +265,11 @@ const StatsTable: React.FC<StatsTableProps> = ({
                                     );
                                   }}
                                   className={`p-1.5 rounded transition-all flex items-center gap-1 ${
-                                    downloadingId === `${upz.id}-invalid` ? 'bg-red-500/20 text-red-400' : 'hover:bg-red-500/20 text-red-500'
-                                  } ${!!downloadingId ? 'opacity-50 cursor-not-allowed' : ''}`} 
-                                  title="Invalid Summary PDF"
+                                    downloadingId === `${upz.id}-invalid` ? 'bg-red-500/20 text-red-400' :
+                                    !upz.invalid ? 'text-slate-700' :
+                                    'hover:bg-red-500/20 text-red-500'
+                                  } ${(!!downloadingId || !upz.invalid) ? 'opacity-40 cursor-not-allowed' : ''}`} 
+                                  title={!upz.invalid ? "No invalid records" : "Invalid Summary PDF"}
                                 >
                                   {downloadingId === `${upz.id}-invalid` ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
                                   <span className="text-[10px] font-bold">Invalid</span>

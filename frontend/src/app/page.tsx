@@ -30,6 +30,7 @@ export default function Home() {
   const [additionalColumns, setAdditionalColumns] = useState<string[]>([]);
   const [showAdditionalColumns, setShowAdditionalColumns] = useState(false);
   const [isCorrection, setIsCorrection] = useState(false);
+  const [wipeBeforeUpload, setWipeBeforeUpload] = useState(false);
   const [loading, setLoading] = useState(false);
   const [pollingStatus, setPollingStatus] = useState<{ status: string; valid: number; invalid: number; new_records: number; total: number; message?: string } | null>(null);
   const [geoData, setGeoData] = useState<{
@@ -325,6 +326,7 @@ export default function Home() {
     formData.append("additional_columns", additionalColumns.join(","));
     formData.append("sheet_name", selectedSheet);
     formData.append("is_correction", isCorrection.toString());
+    formData.append("wipe_before_upload", wipeBeforeUpload.toString());
     if (selectedDivision) formData.append("division", selectedDivision);
     if (selectedDistrict) formData.append("district", selectedDistrict);
     if (selectedUpazila) formData.append("upazila", selectedUpazila);
@@ -611,6 +613,23 @@ export default function Home() {
                   readOnly
                 />
                 <span>Include Additional Columns In Reports</span>
+              </div>
+
+              {/* Wipe Before Upload */}
+              <div
+                className="space-y-2 col-span-1 md:col-span-2 font-medium text-slate-300 mb-2 flex items-center gap-3 cursor-pointer select-none bg-orange-500/10 p-4 rounded-xl border border-orange-500/20"
+                onClick={() => setWipeBeforeUpload(!wipeBeforeUpload)}
+              >
+                <input
+                  type="checkbox"
+                  className="w-5 h-5 rounded border-orange-500/50 bg-slate-900 text-orange-500 pointer-events-none"
+                  checked={wipeBeforeUpload}
+                  readOnly
+                />
+                <div>
+                  <span className="text-orange-300 font-bold block">Wipe Upazila Before Upload</span>
+                  <p className="text-xs text-slate-400 font-normal mt-0.5">Clears ALL existing records for this upazila first, then inserts the new batch. Ensures the statistics page exactly matches this upload's results. Use for re-uploads.</p>
+                </div>
               </div>
 
               <div

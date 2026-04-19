@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Form
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from .database import get_db
 from .models import User, SystemConfig, RemoteInstance, Upazila, TrailingZeroWhitelist, AuditLog, ApiUsageLog
@@ -18,7 +19,12 @@ import time
 import threading
 
 # Background task status now tracked via BackgroundTask DB model
+BACKUP_DIR = "/app/backups"
+RETENTION_DAYS = 30
 
+
+import logging
+logger = logging.getLogger("ffp")
 
 router = APIRouter(tags=["admin"])
 
@@ -197,8 +203,16 @@ class UpazilaOut(BaseModel):
         from_attributes = True
 
 @router.get("/upazilas", response_model=List[UpazilaOut], dependencies=[Depends(PermissionChecker("view_geo"))])
-async def get_upazilas(db: Session = Depends(get_db)):
-    return db.query(Upazila).all()
+async def get_upazilas(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    query = db.query(Upazila)
+    if current_user.role != "admin":
+        if getattr(current_user, "division_access", None):
+            query = query.filter(Upazila.division_name == current_user.division_access)
+        if getattr(current_user, "district_access", None):
+            query = query.filter(Upazila.district_name == current_user.district_access)
+        if getattr(current_user, "upazila_access", None):
+            query = query.filter(Upazila.name == current_user.upazila_access)
+    return query.all()
 
 @router.post("/upazilas", response_model=UpazilaOut, dependencies=[Depends(PermissionChecker("manage_geo"))])
 async def create_upazila(data: UpazilaCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
@@ -249,131 +263,305 @@ async def update_upazila_quota(id: int, data: UpazilaQuotaUpdate, db: Session = 
 
 # --- Database Management ---
 
-@router.get("/db/export", dependencies=[Depends(PermissionChecker("view_admin"))])
-async def export_database(current_user: User = Depends(get_current_user)):
-    """
-    Exports the database to a .sql file and returns it as a download.
-    """
-    db_name = os.environ.get("POSTGRES_DB", "ffp_validator")
-    db_user = os.environ.get("POSTGRES_USER", "fayez")
-    db_host = os.environ.get("POSTGRES_HOST", "db")
-    db_password = os.environ.get("POSTGRES_PASSWORD", "")
-    if not db_password:
-        raise HTTPException(status_code=500, detail="Database password not configured in environment.")
-    
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"ffp_db_export_{timestamp}.sql"
-    
-    # We use a temp file to store the dump before sending
-    temp_dir = tempfile.gettempdir()
-    filepath = os.path.join(temp_dir, filename)
-    
-    env = os.environ.copy()
-    env["PGPASSWORD"] = db_password
-    
-    try:
-        # Run pg_dump
-        subprocess.run(
-            ["pg_dump", "-h", db_host, "-U", db_user, "-f", filepath, db_name],
-            env=env,
-            check=True,
-            capture_output=True
-        )
-        
-        # Log the action
-        # Note: We don't have a DB session here easily without boilerplate, 
-        # but the PermissionChecker ensures only admins can reach this.
-        
-        return FileResponse(
-            path=filepath, 
-            filename=filename, 
-            media_type='application/sql',
-            background=None # File will be cleaned up by OS temp cleanup or manually
-        )
-    except subprocess.CalledProcessError as e:
-        error_msg = e.stderr.decode() if e.stderr else str(e)
-        raise HTTPException(status_code=500, detail=f"Database export failed: {error_msg}")
+# --- Database Management (Background Jobs) ---
 
-@router.post("/db/import", dependencies=[Depends(PermissionChecker("view_admin"))])
-async def import_database(file: UploadFile = File(...), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """
-    Imports a .sql file to restore the database.
-    WARNING: This will overwrite existing data.
-    """
-    if not file.filename.endswith(".sql"):
-        raise HTTPException(status_code=400, detail="Only .sql files are supported")
-    
-    db_name = os.environ.get("POSTGRES_DB", "ffp_validator")
-    db_user = os.environ.get("POSTGRES_USER", "fayez")
-    db_host = os.environ.get("POSTGRES_HOST", "db")
-    db_password = os.environ.get("POSTGRES_PASSWORD", "")
-    if not db_password:
-        raise HTTPException(status_code=500, detail="Database password not configured in environment.")
-    
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".sql")
+def _purge_old_backups():
+    """Deletes backups older than RETENTION_DAYS."""
     try:
-        shutil.copyfileobj(file.file, temp_file)
-        temp_file.close()
+        if not os.path.exists(BACKUP_DIR):
+            return 
+        now = time.time()
+        for f in os.listdir(BACKUP_DIR):
+            if not f.endswith(".sql.gz"):
+                continue
+            f_path = os.path.join(BACKUP_DIR, f)
+            if os.path.isfile(f_path):
+                if os.stat(f_path).st_mtime < now - (RETENTION_DAYS * 86400):
+                    os.remove(f_path)
+    except Exception as e:
+        print(f"Error purging old backups: {e}")
+
+def _run_db_backup(db_session_factory, task_id: str, user_id: int):
+    db = db_session_factory()
+    from .models import BackgroundTask
+    task = db.query(BackgroundTask).filter(BackgroundTask.id == task_id).first()
+    if not task:
+        db.close()
+        return
+
+    task.status = "running"
+    db.commit()
+
+    try:
+        db_name = os.environ.get("POSTGRES_DB", "ffp_validator")
+        db_user = os.environ.get("POSTGRES_USER", "fayez")
+        db_host = os.environ.get("POSTGRES_HOST", "db")
+        db_pass = os.environ.get("POSTGRES_PASSWORD", "")
+        # Default port to 6432 if using pgbouncer, otherwise 5432
+        default_port = "6432" if "pgbouncer" in db_host.lower() else "5432"
+        db_port = os.environ.get("POSTGRES_PORT", default_port)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"ffp_manual_backup_{timestamp}.sql.gz"
+        os.makedirs(BACKUP_DIR, exist_ok=True)
+        filepath = os.path.join(BACKUP_DIR, filename)
         
         env = os.environ.copy()
-        env["PGPASSWORD"] = db_password
+        env["PGPASSWORD"] = db_pass
         
-        # Restoring a live DB can be tricky. 
-        # A simple way is to use psql to run the commands in the SQL file.
-        # This assumes the SQL file contains commands to DROP/CREATE tables or just INSERTs.
-        
-        # If the pg_dump was from this same DB structure, it likely contains:
-        # DROP TABLE IF EXISTS ...
-        # CREATE TABLE ...
-        
-        # We'll execute it using psql
-        result = subprocess.run(
-            ["psql", "-h", db_host, "-U", db_user, "-d", db_name, "-f", temp_file.name],
-            env=env,
-            check=True,
-            capture_output=True
-        )
-        
-        log_audit(db, current_user, "IMPORT", "database", 0, new_data={"filename": file.filename})
-        
-        return {"detail": "Database imported successfully"}
-        
-    except subprocess.CalledProcessError as e:
-        error_msg = e.stderr.decode() if e.stderr else str(e)
-        raise HTTPException(status_code=500, detail=f"Database import failed: {error_msg}")
+        task.message = f"Creating compressed backup: {filename}"
+        db.commit()
+
+        # pg_dump piped to gzip
+        with open(filepath, "wb") as f_out:
+            dump_proc = subprocess.Popen(
+                ["pg_dump", "-h", db_host, "-p", db_port, "-U", db_user, db_name],
+                env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            gzip_proc = subprocess.Popen(
+                ["gzip"], stdin=dump_proc.stdout, stdout=f_out
+            )
+            dump_proc.stdout.close()
+            _, stderr = dump_proc.communicate()
+            gzip_proc.communicate()
+
+        if dump_proc.returncode != 0:
+            raise Exception(stderr.decode() if stderr else "pg_dump failed")
+
+        _purge_old_backups()
+
+        task.status = "completed"
+        task.progress = 100
+        task.message = f"Backup completed: {filename}"
+        task.result_url = f"/api/admin/db/backups/{filename}/download"
+        db.commit()
+
+    except Exception as e:
+        db.rollback()
+        task.status = "error"
+        task.error_details = str(e)
+        task.message = f"Backup failed: {str(e)}"
+        db.commit()
     finally:
-        if os.path.exists(temp_file.name):
-            os.remove(temp_file.name)
+        db.close()
+
+def _run_db_restore(db_session_factory, task_id: str, filepath: str):
+    db = db_session_factory()
+    from .models import BackgroundTask
+    task = db.query(BackgroundTask).filter(BackgroundTask.id == task_id).first()
+    if not task:
+        db.close()
+        return
+
+    task.status = "running"
+    db.commit()
+
+    try:
+        db_name = os.environ.get("POSTGRES_DB", "ffp_validator")
+        db_user = os.environ.get("POSTGRES_USER", "fayez")
+        db_host = os.environ.get("POSTGRES_HOST", "db")
+        db_pass = os.environ.get("POSTGRES_PASSWORD", "")
+        # Default port to 6432 if using pgbouncer, otherwise 5432
+        default_port = "6432" if "pgbouncer" in db_host.lower() else "5432"
+        db_port = os.environ.get("POSTGRES_PORT", default_port)
+        
+        env = os.environ.copy()
+        env["PGPASSWORD"] = db_pass
+        
+        # Determine if it's gzipped
+        is_gz = filepath.endswith(".gz")
+        task.message = f"Restoring database from {'compressed ' if is_gz else ''}file..."
+        db.commit()
+
+        if is_gz:
+            # zcat | psql
+            zcat_cmd = "zcat" if os.name != "nt" else "gunzip -c"
+            # Note: subprocess.run with shell=True or pipes
+            restore_proc = subprocess.Popen(
+                ["psql", "-h", db_host, "-p", db_port, "-U", db_user, "-d", db_name],
+                env=env, stdin=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            with subprocess.Popen([zcat_cmd, filepath], stdout=restore_proc.stdin) as zcat_proc:
+                restore_proc.stdin.close()
+                _, stderr = restore_proc.communicate()
+        else:
+            # psql -f
+            restore_proc = subprocess.run(
+                ["psql", "-h", db_host, "-p", db_port, "-U", db_user, "-d", db_name, "-f", filepath],
+                env=env, capture_output=True
+            )
+            stderr = restore_proc.stderr
+
+        if restore_proc.returncode != 0:
+            raise Exception(stderr.decode() if stderr else "psql restore failed")
+
+        task.status = "completed"
+        task.progress = 100
+        task.message = "Database restore successful"
+        db.commit()
+
+    except Exception as e:
+        db.rollback()
+        task.status = "error"
+        task.error_details = str(e)
+        task.message = f"Restore failed: {str(e)}"
+        db.commit()
+    finally:
+        if "/tmp/" in filepath and os.path.exists(filepath):
+            os.remove(filepath)
+        db.close()
+
+@router.get("/db/backups", dependencies=[Depends(PermissionChecker("view_admin"))])
+async def list_backups():
+    """Lists all files in the persistent backup directory."""
+    if not os.path.exists(BACKUP_DIR):
+        return []
+    
+    files = []
+    for f in os.listdir(BACKUP_DIR):
+        if not (f.endswith(".sql") or f.endswith(".sql.gz")):
+            continue
+        f_path = os.path.join(BACKUP_DIR, f)
+        stats = os.stat(f_path)
+        files.append({
+            "filename": f,
+            "size": stats.st_size,
+            "created_at": datetime.fromtimestamp(stats.st_mtime).isoformat()
+        })
+    return sorted(files, key=lambda x: x["created_at"], reverse=True)
+
+@router.post("/db/backups/run", dependencies=[Depends(PermissionChecker("view_admin"))])
+async def trigger_db_backup(
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Triggers a background database backup."""
+    from .models import BackgroundTask
+    import uuid
+    from .database import SessionLocal
+    
+    task_id = str(uuid.uuid4())
+    task = BackgroundTask(
+        id=task_id,
+        task_name="db_backup",
+        user_id=current_user.id,
+        status="pending",
+        message="Initializing backup process..."
+    )
+    db.add(task)
+    db.commit()
+    
+    background_tasks.add_task(_run_db_backup, SessionLocal, task_id, current_user.id)
+    return {"message": "Backup task started", "task_id": task_id}
+
+@router.post("/db/backups/upload", dependencies=[Depends(PermissionChecker("view_admin"))])
+async def upload_backup_file(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user)
+):
+    """Uploads a backup file to the persistent directory."""
+    if not (file.filename.endswith(".sql") or file.filename.endswith(".sql.gz")):
+        raise HTTPException(status_code=400, detail="Only .sql or .sql.gz files allowed")
+    
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    filepath = os.path.join(BACKUP_DIR, file.filename)
+    with open(filepath, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+    
+    return {"message": "File uploaded", "filename": file.filename}
+
+@router.get("/db/backups/{filename}/download", dependencies=[Depends(PermissionChecker("view_admin"))])
+async def download_backup(filename: str):
+    """Downloads a specific backup file."""
+    filepath = os.path.join(BACKUP_DIR, filename)
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(filepath, filename=filename)
+
+@router.post("/db/backups/{filename}/restore", dependencies=[Depends(PermissionChecker("view_admin"))])
+async def trigger_db_restore(
+    filename: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Triggers a background database restore from an existing file."""
+    filepath = os.path.join(BACKUP_DIR, filename)
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    # Check if a restore/backup is already running
+    from .models import BackgroundTask
+    import uuid
+    from .database import SessionLocal
+    
+    running = db.query(BackgroundTask).filter(
+        BackgroundTask.task_name.in_(["db_backup", "db_restore"]),
+        BackgroundTask.status == "running"
+    ).first()
+    if running:
+        raise HTTPException(status_code=400, detail="Another database operation is currently in progress")
+    
+    task_id = str(uuid.uuid4())
+    task = BackgroundTask(
+        id=task_id,
+        task_name="db_restore",
+        user_id=current_user.id,
+        status="pending",
+        message="Initializing restore process..."
+    )
+    db.add(task)
+    db.commit()
+    
+    # Auto-backup before restore for safety
+    background_tasks.add_task(_run_db_backup, SessionLocal, str(uuid.uuid4()), current_user.id)
+    background_tasks.add_task(_run_db_restore, SessionLocal, task_id, filepath)
+    
+    return {"message": "Restore task scheduled (Safety backup prioritized)", "task_id": task_id}
+
+@router.delete("/db/backups/{filename}", dependencies=[Depends(PermissionChecker("view_admin"))])
+async def delete_backup(filename: str):
+    """Deletes a backup file from the persistent directory."""
+    filepath = os.path.join(BACKUP_DIR, filename)
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="File not found")
+    os.remove(filepath)
+    return {"message": "File deleted"}
 
 # --- Location Renaming ---
 
 class LocationRename(BaseModel):
+    id: int
     level: str # 'division', 'district', 'upazila'
-    old_name: str
     new_name: str
-    parent_name: Optional[str] = None # division_name for district, district_name for upazila
 
 @router.put("/location/rename", dependencies=[Depends(PermissionChecker("manage_geo"))])
 async def rename_location(data: LocationRename, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
-    Renames a location and cascades the change to all referencing tables.
+    Renames a location and cascades the change to all referencing tables using DB IDs.
     """
     from .models import Division, District, Upazila, SummaryStats, ValidRecord, InvalidRecord, UploadBatch
     
     level = data.level.lower()
-    old_name = data.old_name
-    new_name = data.new_name
-    parent_name = data.parent_name
+    target_id = data.id
+    new_name = data.new_name.strip()
     
+    if not new_name:
+        raise HTTPException(status_code=400, detail="New name cannot be empty")
+
+    old_name = ""
+    parent_name = None 
+
     if level == 'division':
-        # Update Division Table
-        division = db.query(Division).filter(Division.name == old_name).first()
-        if division:
-            division.name = new_name
+        division = db.query(Division).filter(Division.id == target_id).first()
+        if not division:
+            raise HTTPException(status_code=404, detail="Division not found")
+        old_name = division.name
+        division.name = new_name
         
         # Update District Table (division_name)
         db.query(District).filter(District.division_name == old_name).update({"division_name": new_name})
-        
         # Update Upazila Table (division_name)
         db.query(Upazila).filter(Upazila.division_name == old_name).update({"division_name": new_name})
         
@@ -384,10 +572,11 @@ async def rename_location(data: LocationRename, db: Session = Depends(get_db), c
         db.query(UploadBatch).filter(UploadBatch.division == old_name).update({"division": new_name})
         
     elif level == 'district':
-        # Update District Table
-        district = db.query(District).filter(District.name == old_name).first()
-        if district:
-            district.name = new_name
+        district = db.query(District).filter(District.id == target_id).first()
+        if not district:
+            raise HTTPException(status_code=404, detail="District not found")
+        old_name = district.name
+        district.name = new_name
             
         # Update Upazila Table (district_name)
         db.query(Upazila).filter(Upazila.district_name == old_name).update({"district_name": new_name})
@@ -399,32 +588,35 @@ async def rename_location(data: LocationRename, db: Session = Depends(get_db), c
         db.query(UploadBatch).filter(UploadBatch.district == old_name).update({"district": new_name})
         
     elif level == 'upazila':
-        # Update Upazila Table
-        # We use parent_name (district) to ensure we rename the correct upazila
-        query = db.query(Upazila).filter(Upazila.name == old_name)
-        if parent_name:
-            query = query.filter(Upazila.district_name == parent_name)
-        
-        upz = query.first()
-        if upz:
-            upz.name = new_name
+        upz = db.query(Upazila).filter(Upazila.id == target_id).first()
+        if not upz:
+            raise HTTPException(status_code=404, detail="Upazila not found")
+        old_name = upz.name
+        parent_name = upz.district_name
+        upz.name = new_name
             
         # Update Data Tables
-        q_stats = db.query(SummaryStats).filter(SummaryStats.upazila == old_name)
-        q_valid = db.query(ValidRecord).filter(ValidRecord.upazila == old_name)
-        q_invalid = db.query(InvalidRecord).filter(InvalidRecord.upazila == old_name)
-        q_batch = db.query(UploadBatch).filter(UploadBatch.upazila == old_name)
+        db.query(SummaryStats).filter(SummaryStats.upazila == old_name, SummaryStats.district == parent_name).update({"upazila": new_name})
+        db.query(ValidRecord).filter(ValidRecord.upazila == old_name, ValidRecord.district == parent_name).update({"upazila": new_name})
+        db.query(InvalidRecord).filter(InvalidRecord.upazila == old_name, InvalidRecord.district == parent_name).update({"upazila": new_name})
+        db.query(UploadBatch).filter(UploadBatch.upazila == old_name, UploadBatch.district == parent_name).update({"upazila": new_name})
+    
+    else:
+        raise HTTPException(status_code=400, detail="Invalid level")
         
-        if parent_name:
-            q_stats = q_stats.filter(SummaryStats.district == parent_name)
-            q_valid = q_valid.filter(ValidRecord.district == parent_name)
-            q_invalid = q_invalid.filter(InvalidRecord.district == parent_name)
-            q_batch = q_batch.filter(UploadBatch.district == parent_name)
-            
-        q_stats.update({"upazila": new_name})
-        q_valid.update({"upazila": new_name})
-        q_invalid.update({"upazila": new_name})
-        q_batch.update({"upazila": new_name})
+    db.commit()
+    
+    # Audit Log
+    log_audit(db, current_user, "RENAME", level, target_id, old_data={"name": old_name}, new_data={"name": new_name})
+
+    from .stats_utils import refresh_summary_stats
+    if level == 'upazila':
+        refresh_summary_stats(db, "", parent_name or "", new_name)
+    elif level == 'district':
+        upz_list = db.query(Upazila).filter(Upazila.district_name == new_name).all()
+        for u in upz_list:
+             refresh_summary_stats(db, "", new_name, u.name)
+
     
     else:
         raise HTTPException(status_code=400, detail="Invalid level")
@@ -446,6 +638,157 @@ async def rename_location(data: LocationRename, db: Session = Depends(get_db), c
     
     return {"detail": f"Renamed {level} from {old_name} to {new_name}"}
 
+
+# --- Upazila Management ---
+
+class UpazilaCreate(BaseModel):
+    division_name: str
+    district_name: str
+    name: str
+    quota: int = 0
+
+@router.get("/geo/upazilas", dependencies=[Depends(PermissionChecker("view_admin"))])
+async def list_upazilas(db: Session = Depends(get_db)):
+    from .models import Upazila
+    upz_list = db.query(Upazila).filter(Upazila.is_active == True).order_by(Upazila.division_name, Upazila.district_name, Upazila.name).all()
+    return [{
+        "id": u.id,
+        "division_name": u.division_name,
+        "district_name": u.district_name,
+        "name": u.name,
+        "quota": u.quota
+    } for u in upz_list]
+
+@router.get("/geo/tree", dependencies=[Depends(PermissionChecker("view_admin"))])
+async def get_geo_tree(db: Session = Depends(get_db)):
+    """ Returns nested hierarchy: Division -> District -> Upazila with aliases. """
+    from .models import Division, District, Upazila, GeoAlias
+    
+    divisions = db.query(Division).order_by(Division.name).all()
+    districts = db.query(District).order_by(District.division_name, District.name).all()
+    upazilas = db.query(Upazila).order_by(Upazila.district_name, Upazila.name).all()
+    aliases = db.query(GeoAlias).all()
+    
+    # Map aliases by (target_type, target_id)
+    alias_map = {}
+    for a in aliases:
+        key = (a.target_type, a.target_id)
+        if key not in alias_map:
+            alias_map[key] = []
+        alias_map[key].append({"id": a.id, "alias_name": a.alias_name})
+        
+    # Build Tree
+    tree = []
+    
+    # Normalize data structures for nested grouping
+    dist_by_div = {}
+    for d in districts:
+        if d.division_name not in dist_by_div:
+            dist_by_div[d.division_name] = []
+        dist_by_div[d.division_name].append({
+            "id": d.id,
+            "name": d.name,
+            "type": "district",
+            "aliases": alias_map.get(("district", d.id), []),
+            "upazilas": []
+        })
+        
+    upz_by_dist = {}
+    for u in upazilas:
+        if u.district_name not in upz_by_dist:
+            upz_by_dist[u.district_name] = []
+        upz_by_dist[u.district_name].append({
+            "id": u.id,
+            "name": u.name,
+            "type": "upazila",
+            "aliases": alias_map.get(("upazila", u.id), []),
+            "quota": u.quota
+        })
+        
+    for div in divisions:
+        div_data = {
+            "id": div.id,
+            "name": div.name,
+            "type": "division",
+            "aliases": alias_map.get(("division", div.id), []),
+            "districts": dist_by_div.get(div.name, [])
+        }
+        # Nested upazilas into districts
+        for dist in div_data["districts"]:
+            dist["upazilas"] = upz_by_dist.get(dist["name"], [])
+            
+        tree.append(div_data)
+        
+    return tree
+
+@router.post("/geo/upazilas", dependencies=[Depends(PermissionChecker("manage_geo"))])
+async def create_upazila(data: UpazilaCreate, db: Session = Depends(get_db)):
+    from .models import Upazila, Division, District
+    
+    # Ensure parents exist (optional, but good for data integrity)
+    if not db.query(Division).filter(Division.name == data.division_name).first():
+        db.add(Division(name=data.division_name, is_active=True))
+    if not db.query(District).filter(District.name == data.district_name).first():
+        db.add(District(division_name=data.division_name, name=data.district_name, is_active=True))
+    
+    # Check for duplicate
+    existing = db.query(Upazila).filter(
+        Upazila.district_name == data.district_name,
+        Upazila.name == data.name
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Upazila already exists in this district")
+    
+    new_upz = Upazila(
+        division_name=data.division_name,
+        district_name=data.district_name,
+        name=data.name,
+        quota=data.quota,
+        is_active=True
+    )
+    db.add(new_upz)
+    db.commit()
+    return {"message": "Upazila created successfully", "id": new_upz.id}
+
+
+# --- Geo Aliases CRUD ---
+
+class GeoAliasCreate(BaseModel):
+    alias_name: str
+    target_type: str
+    target_id: int
+
+@router.get("/geo/aliases", dependencies=[Depends(PermissionChecker("view_admin"))])
+async def list_geo_aliases(db: Session = Depends(get_db)):
+    from .models import GeoAlias
+    aliases = db.query(GeoAlias).all()
+    return [{"id": a.id, "alias_name": a.alias_name, "target_type": a.target_type, "target_id": a.target_id} for a in aliases]
+
+@router.post("/geo/aliases", dependencies=[Depends(PermissionChecker("manage_geo"))])
+async def create_geo_alias(data: GeoAliasCreate, db: Session = Depends(get_db)):
+    from .models import GeoAlias
+    alias_norm = data.alias_name.strip().lower()
+    if db.query(GeoAlias).filter(GeoAlias.alias_name == alias_norm).first():
+        raise HTTPException(status_code=400, detail="Alias exactly matching this spelling already exists")
+    
+    new_alias = GeoAlias(
+        alias_name=alias_norm,
+        target_type=data.target_type.lower(),
+        target_id=data.target_id
+    )
+    db.add(new_alias)
+    db.commit()
+    return {"message": "Alias added successfully", "id": new_alias.id}
+
+@router.delete("/geo/aliases/{alias_id}", dependencies=[Depends(PermissionChecker("manage_geo"))])
+async def delete_geo_alias(alias_id: int, db: Session = Depends(get_db)):
+    from .models import GeoAlias
+    alias = db.query(GeoAlias).filter(GeoAlias.id == alias_id).first()
+    if not alias:
+        raise HTTPException(status_code=404, detail="Alias not found")
+    db.delete(alias)
+    db.commit()
+    return {"message": "Alias deleted successfully"}
 
 # --- Data Maintenance ---
 
@@ -508,6 +851,7 @@ async def get_maintenance_status(db: Session = Depends(get_db)):
     from .models import BackgroundTask
     cleanup_task = db.query(BackgroundTask).filter(BackgroundTask.task_name == "geo_cleanup").order_by(BackgroundTask.created_at.desc()).first()
     delete_task = db.query(BackgroundTask).filter(BackgroundTask.task_name == "geo_delete").order_by(BackgroundTask.created_at.desc()).first()
+    repair_geo_task = db.query(BackgroundTask).filter(BackgroundTask.task_name == "repair_geo").order_by(BackgroundTask.created_at.desc()).first()
     
     return {
         "cleanup": {
@@ -522,6 +866,13 @@ async def get_maintenance_status(db: Session = Depends(get_db)):
             "message": delete_task.message if delete_task else "",
             "error": delete_task.error_details if delete_task else None,
             "last_run": delete_task.created_at.isoformat() if delete_task else None
+        },
+        "repair_geo": {
+            "status": repair_geo_task.status if repair_geo_task else "idle",
+            "progress": repair_geo_task.progress if repair_geo_task else 0,
+            "message": repair_geo_task.message if repair_geo_task else "",
+            "error": repair_geo_task.error_details if repair_geo_task else None,
+            "last_run": repair_geo_task.created_at.isoformat() if repair_geo_task else None
         }
     }
 
@@ -579,6 +930,19 @@ def run_cleanup_background(db_session_factory, task_id: str, user_id: int, usern
             res = db.execute(_text(sql_upz))
             backfilled += res.rowcount
             db.commit()
+
+            # 1.5 Match Upazila via Aliases
+            sql_upz_alias = f"""
+                UPDATE {tbl} t
+                SET upazila_id = a.target_id
+                FROM geo_aliases a
+                WHERE lower(t.upazila) = lower(a.alias_name)
+                  AND a.target_type = 'upazila'
+                  AND t.upazila_id IS NULL
+            """
+            res_alias = db.execute(_text(sql_upz_alias))
+            backfilled += res_alias.rowcount
+            db.commit()
             
             # 2. Match by District
             sql_dist = f"""
@@ -588,7 +952,21 @@ def run_cleanup_background(db_session_factory, task_id: str, user_id: int, usern
                 WHERE lower(t.district) = lower(d.name)
                   AND t.district_id IS NULL
             """
-            db.execute(_text(sql_dist))
+            res = db.execute(_text(sql_dist))
+            backfilled += res.rowcount
+            db.commit()
+
+            # 2.5 Match District via Aliases
+            sql_dist_alias = f"""
+                UPDATE {tbl} t
+                SET district_id = a.target_id
+                FROM geo_aliases a
+                WHERE lower(t.district) = lower(a.alias_name)
+                  AND a.target_type = 'district'
+                  AND t.district_id IS NULL
+            """
+            res_alias = db.execute(_text(sql_dist_alias))
+            backfilled += res_alias.rowcount
             db.commit()
             
             # 3. Match by Division
@@ -599,7 +977,21 @@ def run_cleanup_background(db_session_factory, task_id: str, user_id: int, usern
                 WHERE lower(t.division) = lower(dv.name)
                   AND t.division_id IS NULL
             """
-            db.execute(_text(sql_div))
+            res = db.execute(_text(sql_div))
+            backfilled += res.rowcount
+            db.commit()
+
+            # 3.5 Match Division via Aliases
+            sql_div_alias = f"""
+                UPDATE {tbl} t
+                SET division_id = a.target_id
+                FROM geo_aliases a
+                WHERE lower(t.division) = lower(a.alias_name)
+                  AND a.target_type = 'division'
+                  AND t.division_id IS NULL
+            """
+            res_alias = db.execute(_text(sql_div_alias))
+            backfilled += res_alias.rowcount
             db.commit()
 
         task.status = "completed"
@@ -654,6 +1046,166 @@ async def trigger_cleanup(
     background_tasks.add_task(run_cleanup_background, SessionLocal, task_id, current_user.id, current_user.username)
     
     return {"message": "Cleanup started in background", "task_id": task_id}
+
+
+def run_repair_geo_ids_background(db_session_factory, task_id: str, user_id: int, username: str):
+    """Heavy-lifting background job for repairing geo IDs."""
+    db = db_session_factory()
+    from .models import BackgroundTask, User
+    task = db.query(BackgroundTask).filter(BackgroundTask.id == task_id).first()
+    if not task:
+        db.close()
+        return
+
+    task.status = "running"
+    db.commit()
+    report = {}
+    try:
+        tables = ["valid_records", "invalid_records", "summary_stats", "upload_batches"]
+        for idx, tbl in enumerate(tables):
+            task.progress = int((idx / 4) * 100)
+            task.message = f"Repairing IDs for {tbl}..."
+            db.commit()
+            
+            # Re-assign upazila_id, district_id, division_id for every row by name match.
+            # Uses a single SET-based UPDATE with a lateral join — no Python loops.
+            fix_sql = text(f"""
+                UPDATE {tbl} t
+                SET
+                    upazila_id  = u.id,
+                    district_id = d.id,
+                    division_id = dv.id
+                FROM upazilas u
+                JOIN districts d  ON d.name  = u.district_name
+                JOIN divisions dv ON dv.name  = d.division_name
+                WHERE LOWER(TRIM(u.name))          = LOWER(TRIM(t.upazila))
+                  AND LOWER(TRIM(u.district_name)) = LOWER(TRIM(t.district))
+                  AND (
+                        t.upazila_id  IS DISTINCT FROM u.id
+                     OR t.district_id IS DISTINCT FROM d.id
+                     OR t.division_id IS DISTINCT FROM dv.id
+                  )
+            """)
+            result = db.execute(fix_sql)
+            report[tbl] = result.rowcount
+            db.commit()
+
+        task.status = "completed"
+        task.progress = 100
+        total = sum(report.values())
+        task.message = f"Repaired {total} rows. Refreshing stats..."
+        db.commit()
+
+        # Auto-refresh SummaryStats from truth tables after repair
+        try:
+            recalc_sql = text("""
+                WITH counts AS (
+                    SELECT 
+                        district, upazila,
+                        SUM(valid_cnt) as live_valid,
+                        SUM(invalid_cnt) as live_invalid
+                    FROM (
+                        SELECT district, upazila, COUNT(*) as valid_cnt, 0 as invalid_cnt 
+                        FROM valid_records GROUP BY district, upazila
+                        UNION ALL
+                        SELECT district, upazila, 0 as valid_cnt, COUNT(*) as invalid_cnt 
+                        FROM invalid_records GROUP BY district, upazila
+                    ) combined
+                    GROUP BY district, upazila
+                )
+                UPDATE summary_stats s
+                SET valid = COALESCE(c.live_valid, 0),
+                    invalid = COALESCE(c.live_invalid, 0),
+                    total = COALESCE(c.live_valid, 0) + COALESCE(c.live_invalid, 0),
+                    updated_at = NOW()
+                FROM counts c
+                WHERE LOWER(TRIM(s.district)) = LOWER(TRIM(c.district))
+                  AND LOWER(TRIM(s.upazila))  = LOWER(TRIM(c.upazila))
+            """)
+            stats_result = db.execute(recalc_sql)
+            stats_updated = stats_result.rowcount
+
+            # Zero out ghost entries (SummaryStats with no matching records)
+            zero_sql = text("""
+                UPDATE summary_stats s
+                SET valid = 0, invalid = 0, total = 0, updated_at = NOW()
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM valid_records v
+                    WHERE LOWER(TRIM(v.district)) = LOWER(TRIM(s.district))
+                      AND LOWER(TRIM(v.upazila))  = LOWER(TRIM(s.upazila))
+                )
+                AND NOT EXISTS (
+                    SELECT 1 FROM invalid_records i
+                    WHERE LOWER(TRIM(i.district)) = LOWER(TRIM(s.district))
+                      AND LOWER(TRIM(i.upazila))  = LOWER(TRIM(s.upazila))
+                )
+                AND (s.valid > 0 OR s.invalid > 0)
+            """)
+            ghost_result = db.execute(zero_sql)
+            ghosts_zeroed = ghost_result.rowcount
+            db.commit()
+
+            task.message = f"Repaired {total} rows. Stats refreshed ({stats_updated} synced, {ghosts_zeroed} ghost entries zeroed)."
+            db.commit()
+            logger.info("repair-geo-ids: auto-refreshed %d stats, zeroed %d ghosts", stats_updated, ghosts_zeroed)
+        except Exception as stats_err:
+            db.rollback()
+            logger.warning("repair-geo-ids: stats auto-refresh failed: %s", str(stats_err))
+            task.message = f"Repaired {total} rows. Stats refresh failed — run Refresh Stats manually."
+            db.commit()
+
+        # Log Audit
+        user = db.query(User).filter(User.id == user_id).first()
+        log_audit(db, user, "MAINTENANCE", "system", 0, 
+                  new_data={"action": "repair_geo_ids", "rows_updated": report})
+
+    except Exception as e:
+        db.rollback()
+        task.status = "error"
+        task.error_details = str(e)
+        logger.error("repair-geo-ids background failed: %s", str(e))
+        task.message = f"Repair failed: {str(e)}"
+        db.commit()
+    finally:
+        db.close()
+
+@router.post("/maintenance/repair-geo-ids", dependencies=[Depends(PermissionChecker("manage_geo"))])
+async def trigger_repair_geo_ids(
+    background_tasks: BackgroundTasks, 
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Force-repairs upazila_id, district_id, and division_id on ALL records by re-matching
+    against the canonical upazilas/districts/divisions master tables using text names.
+
+    Triggers the high-performance geo-repair in the background to prevent timeouts.
+    """
+    from .models import BackgroundTask
+    running_task = db.query(BackgroundTask).filter(
+        BackgroundTask.task_name == "repair_geo", 
+        BackgroundTask.status == "running"
+    ).first()
+    if running_task:
+        return {"message": "Repair is already running", "status": {"status": "running"}}
+    
+    task_id = str(uuid.uuid4())
+    task = BackgroundTask(
+        id=task_id,
+        task_name="repair_geo",
+        user_id=current_user.id,
+        status="pending",
+        message="Starting geo ID repair..."
+    )
+    db.add(task)
+    db.commit()
+
+    from .database import SessionLocal
+    background_tasks.add_task(run_repair_geo_ids_background, SessionLocal, task_id, current_user.id, current_user.username)
+    
+    return {"message": "Repair started in background", "task_id": task_id}
+
+
 
 
 @router.delete("/maintenance/delete-unresolved", dependencies=[Depends(PermissionChecker("manage_geo"))])
@@ -758,6 +1310,11 @@ def delete_unresolved(db: Session = Depends(get_db), current_user: User = Depend
     return {
         "success": len(report["errors"]) == 0,
         "total_records_deleted": total_deleted,
+        "valid_records_deleted": report["deleted"].get("valid_records", 0),
+        "invalid_records_deleted": report["deleted"].get("invalid_records", 0),
+        "summary_stats_rows_deleted": report["deleted"].get("summary_stats", 0),
+        "upload_batches_archived": report["deleted"].get("upload_batches_marked", 0),
+        "stats_recalculated": report["deleted"].get("summary_stats", 0), # Reclac happened for all remaining matching stats
         "report": report,
     }
 

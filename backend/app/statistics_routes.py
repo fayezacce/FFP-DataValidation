@@ -148,7 +148,18 @@ async def delete_upazila_data(
     db.query(UploadBatch).filter(UploadBatch.division == division, UploadBatch.district == district, UploadBatch.upazila == upazila).delete(synchronize_session=False)
     db.commit()
 
-    log_audit(db, current_user, "DELETE", "upazila_full_wipe", f"{division}/{district}/{upazila}", old_data={"details": "Fully wiped records, stats, and batches for upazila"})
+    log_audit(
+        db, 
+        current_user, 
+        "DELETE", 
+        "upazila_full_wipe", 
+        f"{division}/{district}/{upazila}", 
+        old_data={
+            "details": f"Fully wiped all records, stats, and batches for {upazila}",
+            "location": f"{division} > {district} > {upazila}",
+            "type": "full_wipe"
+        }
+    )
     return {"status": "success", "message": f"All data for {upazila} has been deleted."}
 
 
@@ -186,3 +197,88 @@ async def update_statistics(
     log_audit(db, current_user, "UPDATE", "summary_stats", summary.id, new_data={"action": "summary_update"})
     return summary
 
+
+@router.post("/refresh-all", dependencies=[Depends(PermissionChecker("manage_geo"))])
+async def refresh_all_stats(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Recalculate ALL SummaryStats from truth tables (valid_records + invalid_records)
+    using a single set-based SQL query. Fixes any stale/ghost counts.
+
+    This is the definitive fix for statistics desynchronization.
+    """
+    from sqlalchemy import text
+
+    try:
+        # Step 1: Recalculate valid/invalid counts from live records for existing SummaryStats entries
+        recalculate_sql = text("""
+            WITH counts AS (
+                SELECT 
+                    district, upazila,
+                    SUM(valid_cnt) as live_valid,
+                    SUM(invalid_cnt) as live_invalid
+                FROM (
+                    SELECT district, upazila, COUNT(*) as valid_cnt, 0 as invalid_cnt 
+                    FROM valid_records GROUP BY district, upazila
+                    UNION ALL
+                    SELECT district, upazila, 0 as valid_cnt, COUNT(*) as invalid_cnt 
+                    FROM invalid_records GROUP BY district, upazila
+                ) combined
+                GROUP BY district, upazila
+            )
+            UPDATE summary_stats s
+            SET valid = COALESCE(c.live_valid, 0),
+                invalid = COALESCE(c.live_invalid, 0),
+                total = COALESCE(c.live_valid, 0) + COALESCE(c.live_invalid, 0),
+                updated_at = NOW()
+            FROM counts c
+            WHERE LOWER(TRIM(s.district)) = LOWER(TRIM(c.district))
+              AND LOWER(TRIM(s.upazila))  = LOWER(TRIM(c.upazila))
+        """)
+        result = db.execute(recalculate_sql)
+        updated = result.rowcount
+
+        # Step 2: Zero out SummaryStats entries that have NO matching records at all
+        # (ghost entries where all records were deleted but SummaryStats wasn't cleaned)
+        zero_ghosts_sql = text("""
+            UPDATE summary_stats s
+            SET valid = 0,
+                invalid = 0,
+                total = 0,
+                updated_at = NOW()
+            WHERE NOT EXISTS (
+                SELECT 1 FROM valid_records v
+                WHERE LOWER(TRIM(v.district)) = LOWER(TRIM(s.district))
+                  AND LOWER(TRIM(v.upazila))  = LOWER(TRIM(s.upazila))
+            )
+            AND NOT EXISTS (
+                SELECT 1 FROM invalid_records i
+                WHERE LOWER(TRIM(i.district)) = LOWER(TRIM(s.district))
+                  AND LOWER(TRIM(i.upazila))  = LOWER(TRIM(s.upazila))
+            )
+            AND (s.valid > 0 OR s.invalid > 0)
+        """)
+        ghost_result = db.execute(zero_ghosts_sql)
+        zeroed = ghost_result.rowcount
+
+        db.commit()
+
+        log_audit(db, current_user, "MAINTENANCE", "summary_stats", 0, new_data={
+            "action": "refresh_all_stats",
+            "updated": updated,
+            "ghost_entries_zeroed": zeroed
+        })
+
+        logger.info("refresh-all-stats: %d entries updated, %d ghost entries zeroed", updated, zeroed)
+        return {
+            "success": True,
+            "message": f"Refreshed {updated} stats entries from truth tables. Zeroed {zeroed} ghost entries.",
+            "updated": updated,
+            "ghost_entries_zeroed": zeroed,
+        }
+    except Exception as e:
+        db.rollback()
+        logger.error("refresh-all-stats failed: %s", str(e))
+        return {"success": False, "error": str(e)}
