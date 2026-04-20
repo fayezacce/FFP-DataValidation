@@ -49,65 +49,61 @@ async def lifespan(app: FastAPI):
     for attempt in range(max_retries):
         try:
             db_init = SessionLocal()
-            db_init.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
-            db_init.commit()
-            db_init.close()
-            # Clean up orphan sequences left by previously interrupted create_all()
-            # (sequences exist but their tables don't — causes UniqueViolation on retry)
             try:
-                with engine.connect() as conn:
-                    # Get all existing tables
-                    res_tables = conn.execute(text(
-                        "SELECT table_name FROM information_schema.tables WHERE table_schema='public'"
-                    ))
-                    existing_tables = {row[0] for row in res_tables}
-                    
-                    # Get all existing sequences
-                    res_seqs = conn.execute(text(
-                        "SELECT sequence_name FROM information_schema.sequences WHERE sequence_schema='public'"
-                    ))
-                    existing_seqs = [row[0] for row in res_seqs]
-                    
-                    for seq_name in existing_seqs:
-                        # Logic: if sequence is table_id_seq, table should exist
-                        if seq_name.endswith("_id_seq"):
-                            table_name = seq_name[:-7] # remove "_id_seq"
-                            if table_name not in existing_tables:
-                                logger.warning(f"Found orphan sequence '{seq_name}' for missing table '{table_name}'. Dropping...")
-                                conn.execute(text(f"DROP SEQUENCE IF EXISTS {seq_name} CASCADE"))
-                    conn.commit()
-            except Exception as e:
-                logger.error(f"Orphan sequence cleanup failed: {e}")
+                # Use a Postgres session-level advisory lock to prevent multiple Uvicorn workers
+                # from racing to create schema and seed data concurrently, which causes UniqueViolations.
+                db_init.execute(text("SELECT pg_advisory_lock(42424242)"))
+                db_init.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+                db_init.commit()
+                
+                # Clean up orphan sequences left by previously interrupted create_all()
+                try:
+                    with engine.connect() as conn:
+                        res_tables = conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_schema='public'"))
+                        existing_tables = {row[0] for row in res_tables}
+                        res_seqs = conn.execute(text("SELECT sequence_name FROM information_schema.sequences WHERE sequence_schema='public'"))
+                        existing_seqs = [row[0] for row in res_seqs]
+                        for seq_name in existing_seqs:
+                            if seq_name.endswith("_id_seq"):
+                                table_name = seq_name[:-7]
+                                if table_name not in existing_tables:
+                                    logger.warning(f"Found orphan sequence '{seq_name}' for missing table '{table_name}'. Dropping...")
+                                    conn.execute(text(f"DROP SEQUENCE IF EXISTS {seq_name} CASCADE"))
+                        conn.commit()
+                except Exception as e:
+                    logger.error(f"Orphan sequence cleanup failed: {e}")
 
-            Base.metadata.create_all(bind=engine)
-            
-            db = SessionLocal()
-            migrate_schema(db)
-            _migrate_json_to_db(db)
-            
-            # Seed default admin if no users exist
-            if db.query(User).count() == 0:
-                admin_user = User(username="admin", hashed_password=hash_password("admin123"), role="admin")
-                db.add(admin_user)
-                db.commit()
-                logger.warning("Default admin user created: admin / admin123 — CHANGE IT IMMEDIATELY!")
-            else:
-                admin = db.query(User).filter(User.username == "admin").first()
-                if admin and verify_password("admin123", admin.hashed_password):
-                    if db.query(ValidRecord).count() > 0:
-                        app.state.security_lockout = True
-                        logger.critical("SECURITY LOCKOUT — default admin password is active AND data exists. Upload endpoints disabled.")
-                    else:
-                        logger.warning("Default admin password 'admin123' is still active!")
+                Base.metadata.create_all(bind=engine)
+                
+                migrate_schema(db_init)
+                _migrate_json_to_db(db_init)
+                
+                # Seed default admin if no users exist
+                if db_init.query(User).count() == 0:
+                    admin_user = User(username="admin", hashed_password=hash_password("admin123"), role="admin")
+                    db_init.add(admin_user)
+                    db_init.commit()
+                    logger.warning("Default admin user created: admin / admin123 — CHANGE IT IMMEDIATELY!")
+                else:
+                    admin = db_init.query(User).filter(User.username == "admin").first()
+                    if admin and verify_password("admin123", admin.hashed_password):
+                        if db_init.query(ValidRecord).count() > 0:
+                            app.state.security_lockout = True
+                            logger.critical("SECURITY LOCKOUT — default admin password is active AND data exists. Upload endpoints disabled.")
+                        else:
+                            logger.warning("Default admin password 'admin123' is still active!")
 
-            _seed_geo_data_if_empty(db)
-            _seed_permissions_if_empty(db)
-            _sync_geo_aliases(db)
-            _sync_header_aliases(db)
+                _seed_geo_data_if_empty(db_init)
+                _seed_permissions_if_empty(db_init)
+                _sync_geo_aliases(db_init)
+                _sync_header_aliases(db_init)
 
-            from . import bd_geo
-            bd_geo.load_geo_data_from_db(db)
-            db.close()
+                from . import bd_geo
+                bd_geo.load_geo_data_from_db(db_init)
+            finally:
+                db_init.execute(text("SELECT pg_advisory_unlock(42424242)"))
+                db_init.commit()
+                db_init.close()
             
             logger.info("Database initialized successfully.")
             break
