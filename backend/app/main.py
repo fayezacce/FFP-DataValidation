@@ -54,26 +54,30 @@ async def lifespan(app: FastAPI):
             db_init.close()
             # Clean up orphan sequences left by previously interrupted create_all()
             # (sequences exist but their tables don't — causes UniqueViolation on retry)
-            db_init = SessionLocal()
             try:
-                existing_tables = {row[0] for row in db_init.execute(text(
-                    "SELECT table_name FROM information_schema.tables WHERE table_schema='public'"
-                ))}
-                existing_seqs = {row[0] for row in db_init.execute(text(
-                    "SELECT sequence_name FROM information_schema.sequences WHERE sequence_schema='public'"
-                ))}
-                for seq_name in existing_seqs:
-                    # Convention: sequence is "{table}_id_seq"
-                    table_name = seq_name.replace("_id_seq", "")
-                    if table_name not in existing_tables:
-                        db_init.execute(text(f"DROP SEQUENCE IF EXISTS {seq_name} CASCADE"))
-                        logger.info(f"Dropped orphan sequence: {seq_name}")
-                db_init.commit()
+                with engine.connect() as conn:
+                    # Get all existing tables
+                    res_tables = conn.execute(text(
+                        "SELECT table_name FROM information_schema.tables WHERE table_schema='public'"
+                    ))
+                    existing_tables = {row[0] for row in res_tables}
+                    
+                    # Get all existing sequences
+                    res_seqs = conn.execute(text(
+                        "SELECT sequence_name FROM information_schema.sequences WHERE sequence_schema='public'"
+                    ))
+                    existing_seqs = [row[0] for row in res_seqs]
+                    
+                    for seq_name in existing_seqs:
+                        # Logic: if sequence is table_id_seq, table should exist
+                        if seq_name.endswith("_id_seq"):
+                            table_name = seq_name[:-7] # remove "_id_seq"
+                            if table_name not in existing_tables:
+                                logger.warning(f"Found orphan sequence '{seq_name}' for missing table '{table_name}'. Dropping...")
+                                conn.execute(text(f"DROP SEQUENCE IF EXISTS {seq_name} CASCADE"))
+                    conn.commit()
             except Exception as e:
-                logger.warning(f"Orphan sequence cleanup: {e}")
-                db_init.rollback()
-            finally:
-                db_init.close()
+                logger.error(f"Orphan sequence cleanup failed: {e}")
 
             Base.metadata.create_all(bind=engine)
             
