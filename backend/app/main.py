@@ -52,7 +52,29 @@ async def lifespan(app: FastAPI):
             db_init.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
             db_init.commit()
             db_init.close()
-            
+            # Clean up orphan sequences left by previously interrupted create_all()
+            # (sequences exist but their tables don't — causes UniqueViolation on retry)
+            db_init = SessionLocal()
+            try:
+                existing_tables = {row[0] for row in db_init.execute(text(
+                    "SELECT table_name FROM information_schema.tables WHERE table_schema='public'"
+                ))}
+                existing_seqs = {row[0] for row in db_init.execute(text(
+                    "SELECT sequence_name FROM information_schema.sequences WHERE sequence_schema='public'"
+                ))}
+                for seq_name in existing_seqs:
+                    # Convention: sequence is "{table}_id_seq"
+                    table_name = seq_name.replace("_id_seq", "")
+                    if table_name not in existing_tables:
+                        db_init.execute(text(f"DROP SEQUENCE IF EXISTS {seq_name} CASCADE"))
+                        logger.info(f"Dropped orphan sequence: {seq_name}")
+                db_init.commit()
+            except Exception as e:
+                logger.warning(f"Orphan sequence cleanup: {e}")
+                db_init.rollback()
+            finally:
+                db_init.close()
+
             Base.metadata.create_all(bind=engine)
             
             db = SessionLocal()
@@ -253,6 +275,55 @@ def migrate_schema(db: Session):
                 db.commit()
             except Exception:
                 db.rollback()
+
+    # ── NEW COLUMN: column_headers on summary_stats and upload_batches ──
+    for table in ["summary_stats", "upload_batches"]:
+        try:
+            db.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS column_headers JSON"))
+            db.commit()
+        except Exception:
+            db.rollback()
+
+    # ── MISSING INDEXES on existing tables ──────────────────────────────
+    # create_all() does NOT add indexes to tables that already exist in the DB.
+    # We must explicitly create them with IF NOT EXISTS.
+    existing_table_indexes = [
+        # valid_records indexes
+        ("ix_valid_record_name",             "valid_records",  "(name)"),
+        ("ix_valid_record_batch",            "valid_records",  "(upload_batch)"),
+        ("ix_valid_record_batch_id",         "valid_records",  "(batch_id)"),
+        ("ix_valid_upazila_nid",             "valid_records",  "(upazila_id, nid)"),
+        ("ix_valid_records_card_no",         "valid_records",  "(card_no)"),
+        ("ix_valid_records_mobile",          "valid_records",  "(mobile)"),
+        # invalid_records indexes
+        ("ix_invalid_record_batch",          "invalid_records", "(upload_batch)"),
+        ("ix_invalid_record_batch_id",       "invalid_records", "(batch_id)"),
+        ("ix_invalid_upazila_nid",           "invalid_records", "(upazila_id, nid)"),
+        ("ix_invalid_records_card_no",       "invalid_records", "(card_no)"),
+        ("ix_invalid_records_mobile",        "invalid_records", "(mobile)"),
+        ("ix_invalid_records_master_serial", "invalid_records", "(master_serial)"),
+        # summary_stats indexes
+        ("ix_summary_stats_sorting",         "summary_stats",  "(division, district, upazila)"),
+    ]
+    for idx_name, table, cols in existing_table_indexes:
+        try:
+            db.execute(text(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} {cols}"))
+            db.commit()
+        except Exception:
+            db.rollback()
+
+    # GiST trigram indexes for fast global search (require pg_trgm extension)
+    trgm_indexes = [
+        ("ix_valid_record_nid_trgm",  "valid_records",  "nid",  "gist_trgm_ops"),
+        ("ix_valid_record_name_trgm", "valid_records",  "name", "gist_trgm_ops"),
+    ]
+    for idx_name, table, col, ops in trgm_indexes:
+        try:
+            db.execute(text(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} USING gist ({col} {ops})"))
+            db.commit()
+        except Exception as e:
+            logger.warning(f"Trgm index {idx_name} skipped: {e}")
+            db.rollback()
 
     # Handle GeoAlias constraint migration (from global unique to composite unique)
     try:
