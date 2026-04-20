@@ -48,17 +48,17 @@ async def lifespan(app: FastAPI):
     retry_delay = 2
     for attempt in range(max_retries):
         try:
-            db_init = SessionLocal()
             try:
-                # Use a Postgres session-level advisory lock to prevent multiple Uvicorn workers
-                # from racing to create schema and seed data concurrently, which causes UniqueViolations.
-                db_init.execute(text("SELECT pg_advisory_lock(42424242)"))
-                db_init.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
-                db_init.commit()
-                
-                # Clean up orphan sequences left by previously interrupted create_all()
-                try:
-                    with engine.connect() as conn:
+                with engine.connect() as conn:
+                    # Advisory lock at the session level to synchronize all workers
+                    conn.execute(text("SELECT pg_advisory_lock(42424242)"))
+                    
+                    try:
+                        # 1. Extensions
+                        conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+                        conn.commit()
+                        
+                        # 2. Cleanup orphan sequences
                         res_tables = conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_schema='public'"))
                         existing_tables = {row[0] for row in res_tables}
                         res_seqs = conn.execute(text("SELECT sequence_name FROM information_schema.sequences WHERE sequence_schema='public'"))
@@ -70,53 +70,56 @@ async def lifespan(app: FastAPI):
                                     logger.warning(f"Found orphan sequence '{seq_name}' for missing table '{table_name}'. Dropping...")
                                     conn.execute(text(f"DROP SEQUENCE IF EXISTS {seq_name} CASCADE"))
                         conn.commit()
-                except Exception as e:
-                    logger.error(f"Orphan sequence cleanup failed: {e}")
 
-                Base.metadata.create_all(bind=engine)
-                
-                migrate_schema(db_init)
-                _migrate_json_to_db(db_init)
-                
-                # Seed default admin if no users exist
-                if db_init.query(User).count() == 0:
-                    admin_user = User(username="admin", hashed_password=hash_password("admin123"), role="admin")
-                    db_init.add(admin_user)
-                    db_init.commit()
-                    logger.warning("Default admin user created: admin / admin123 — CHANGE IT IMMEDIATELY!")
-                else:
-                    admin = db_init.query(User).filter(User.username == "admin").first()
-                    if admin and verify_password("admin123", admin.hashed_password):
-                        if db_init.query(ValidRecord).count() > 0:
-                            app.state.security_lockout = True
-                            logger.critical("SECURITY LOCKOUT — default admin password is active AND data exists. Upload endpoints disabled.")
-                        else:
-                            logger.warning("Default admin password 'admin123' is still active!")
+                        # 3. Create all tables (idempotent, but now synchronized)
+                        Base.metadata.create_all(bind=conn)
+                        conn.commit()
+                        
+                        # 4. Migrations & Seeding (using a Session bound to this connection)
+                        with Session(bind=conn) as sess:
+                            migrate_schema(sess)
+                            _migrate_json_to_db(sess)
+                            
+                            # Seed default admin
+                            if sess.query(User).count() == 0:
+                                admin_user = User(username="admin", hashed_password=hash_password("admin123"), role="admin")
+                                sess.add(admin_user)
+                                sess.commit()
+                                logger.warning("Default admin user created: admin / admin123 — CHANGE IT IMMEDIATELY!")
+                            else:
+                                admin = sess.query(User).filter(User.username == "admin").first()
+                                if admin and verify_password("admin123", admin.hashed_password):
+                                    if sess.query(ValidRecord).count() > 0:
+                                        app.state.security_lockout = True
+                                        logger.critical("SECURITY LOCKOUT — default admin password is active AND data exists.")
+                                    else:
+                                        logger.warning("Default admin password 'admin123' is still active!")
 
-                _seed_geo_data_if_empty(db_init)
-                _seed_permissions_if_empty(db_init)
-                _sync_geo_aliases(db_init)
-                _sync_header_aliases(db_init)
+                            _seed_geo_data_if_empty(sess)
+                            _seed_permissions_if_empty(sess)
+                            _sync_geo_aliases(sess)
+                            _sync_header_aliases(sess)
 
-                from . import bd_geo
-                bd_geo.load_geo_data_from_db(db_init)
-            finally:
-                db_init.execute(text("SELECT pg_advisory_unlock(42424242)"))
-                db_init.commit()
-                db_init.close()
+                            from . import bd_geo
+                            bd_geo.load_geo_data_from_db(sess)
+                            sess.commit()
+                    finally:
+                        # Always release the lock
+                        conn.execute(text("SELECT pg_advisory_unlock(42424242)"))
+                        conn.commit()
+            except Exception as e:
+                logger.error(f"Database initialization failed: {e}")
+                raise e
             
             logger.info("Database initialized successfully.")
             break
-        except OperationalError as e:
+        except (OperationalError, Exception) as e:
             if attempt < max_retries - 1:
                 logger.warning(f"Database connection failed (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {retry_delay}s...")
                 time.sleep(retry_delay)
             else:
-                logger.error(f"Could not connect to database after {max_retries} attempts. Exiting.")
+                logger.error(f"Could not connect to database after {max_retries} attempts or critical error. Exiting.")
                 raise e
-        except Exception as e:
-            logger.error(f"Unexpected error during application startup: {e}")
-            raise e
 
     yield
 
