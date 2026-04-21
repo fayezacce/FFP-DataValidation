@@ -14,6 +14,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 import os
 import json
+import re
 import time as _time
 import logging
 
@@ -78,7 +79,6 @@ async def lifespan(app: FastAPI):
                         # 4. Migrations & Seeding (using a Session bound to this connection)
                         with Session(bind=conn) as sess:
                             migrate_schema(sess)
-                            _migrate_json_to_db(sess)
                             
                             # Seed default admin
                             if sess.query(User).count() == 0:
@@ -99,14 +99,21 @@ async def lifespan(app: FastAPI):
                             _seed_permissions_if_empty(sess)
                             _sync_geo_aliases(sess)
                             _sync_header_aliases(sess)
-
                             from . import bd_geo
                             bd_geo.load_geo_data_from_db(sess)
                             sess.commit()
                     finally:
-                        # Always release the lock
-                        conn.execute(text("SELECT pg_advisory_unlock(42424242)"))
-                        conn.commit()
+                        # Rollback any aborted transaction before releasing lock
+                        # (migration steps catch their own exceptions, but some may slip through)
+                        try:
+                            conn.rollback()
+                        except Exception:
+                            pass
+                        try:
+                            conn.execute(text("SELECT pg_advisory_unlock(42424242)"))
+                            conn.commit()
+                        except Exception as unlock_err:
+                            logger.warning(f"Advisory lock unlock failed (non-fatal): {unlock_err}")
             except Exception as e:
                 logger.error(f"Database initialization failed: {e}")
                 raise e
@@ -341,10 +348,181 @@ def migrate_schema(db: Session):
     except Exception:
         db.rollback()
 
+    # ── Beneficiary management columns on valid_records and invalid_records ──
+    beneficiary_cols = [
+        ("father_husband_name", "VARCHAR"),
+        ("name_bn",            "VARCHAR"),
+        ("name_en",            "VARCHAR"),
+        ("ward",               "VARCHAR"),
+        ("union_name",         "VARCHAR"),
+        ("dealer_id",          "INTEGER"),
+        ("verification_status","VARCHAR DEFAULT 'unverified'"),
+        ("verified_by_id",     "INTEGER"),
+        ("verified_by",        "VARCHAR"),
+        ("verified_at",        "TIMESTAMP"),
+        # ── Standard Canonical Fields: promoted from data JSON ──
+        ("occupation",         "VARCHAR"),
+        ("gender",             "VARCHAR"),
+        ("religion",           "VARCHAR"),
+        ("address",            "VARCHAR"),
+        ("spouse_name",        "VARCHAR"),
+        ("spouse_nid",         "VARCHAR"),
+        ("spouse_dob",         "VARCHAR"),
+    ]
+    for table in ["valid_records", "invalid_records"]:
+        for col_name, col_def in beneficiary_cols:
+            # Note: invalid_records doesn't need verification status logically, 
+            # but we add it for schema consistency so shared code works easily.
+            try:
+                db.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col_name} {col_def}"))
+                db.commit()
+            except Exception:
+                db.rollback()
+
+    # Indexes for new management columns
+    mgmt_indexes = [
+        ("ix_valid_record_father",        "valid_records",   "(father_husband_name)"),
+        ("ix_valid_record_verification",  "valid_records",   "(verification_status)"),
+        ("ix_valid_record_dealer",        "valid_records",   "(dealer_id)"),
+        ("ix_invalid_record_father",      "invalid_records", "(father_husband_name)"),
+        ("ix_invalid_record_dealer",      "invalid_records", "(dealer_id)"),
+        ("ix_dealers_nid",                "dealers",         "(nid)"),
+        ("ix_dealers_upazila_id",         "dealers",         "(upazila_id)"),
+        # ── New canonical column indexes ──
+        ("ix_valid_gender",               "valid_records",   "(gender)"),
+        ("ix_valid_address",              "valid_records",   "(address)"),
+        ("ix_valid_occupation",           "valid_records",   "(occupation)"),
+        ("ix_valid_spouse_nid",           "valid_records",   "(spouse_nid)"),
+        ("ix_invalid_gender",             "invalid_records", "(gender)"),
+        ("ix_invalid_spouse_nid",         "invalid_records", "(spouse_nid)"),
+    ]
+    for idx_name, table, cols in mgmt_indexes:
+        try:
+            db.execute(text(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} {cols}"))
+            db.commit()
+        except Exception:
+            db.rollback()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SEEDING
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+def _backfill_canonical_columns(db: Session, task_id: str = None):
+    """
+    Admin maintenance Task 6: blazing-fast SQL-native backfill of all 7 new
+    canonical columns (occupation, gender, religion, address, spouse_*)
+    from the data JSONB into dedicated typed columns.
+
+    Prerequisite: Task 4 (Normalize JSON Keys) must have run first so
+    canonical keys already exist inside the data JSON blob.
+
+    Strategy:
+    - Pure SQL: no Python JSON parsing, all work in Postgres JSONB engine
+    - 20,000-row chunks per transaction (proven migrate_dealers pattern)
+    - COALESCE(col, new_val) never overwrites manually-edited data
+    - Idempotent: WHERE clause skips already-backfilled rows
+    """
+    from .models import BackgroundTask
+
+    def _update_task(msg: str, pct: int, status: str = "running"):
+        if not task_id:
+            return
+        try:
+            t = db.query(BackgroundTask).filter(BackgroundTask.id == task_id).first()
+            if t:
+                t.status, t.progress, t.message = status, pct, msg
+                db.commit()
+        except Exception:
+            db.rollback()
+
+    def _is_cancelled() -> bool:
+        if not task_id:
+            return False
+        try:
+            db.expire_all()
+            t = db.query(BackgroundTask).filter(BackgroundTask.id == task_id).first()
+            return t is None or t.status == "error"
+        except Exception:
+            return False
+
+    CHUNK = 20_000
+    UPDATE_SQL = """
+        UPDATE {table} SET
+            occupation  = COALESCE(occupation,  NULLIF(TRIM(data->>'occupation'),  '')),
+            gender      = COALESCE(gender,      NULLIF(TRIM(data->>'gender'),      '')),
+            religion    = COALESCE(religion,    NULLIF(TRIM(data->>'religion'),    '')),
+            address     = COALESCE(address,     NULLIF(TRIM(data->>'address'),     '')),
+            spouse_name = COALESCE(spouse_name, NULLIF(TRIM(data->>'spouse_name'), '')),
+            spouse_nid  = COALESCE(spouse_nid,  NULLIF(TRIM(data->>'spouse_nid'),  '')),
+            spouse_dob  = COALESCE(spouse_dob,  NULLIF(TRIM(data->>'spouse_dob'),  ''))
+        WHERE id IN (
+            SELECT id FROM {table}
+            WHERE data IS NOT NULL
+              AND (occupation IS NULL OR gender IS NULL)
+              AND id > :last_id
+            ORDER BY id ASC
+            LIMIT :lim
+        )
+        RETURNING id
+    """
+    try:
+        _update_task("Computing row counts...", 1)
+        total_valid = db.execute(text(
+            "SELECT count(*) FROM valid_records WHERE data IS NOT NULL AND (occupation IS NULL OR gender IS NULL)"
+        )).scalar() or 0
+        total_invalid = db.execute(text(
+            "SELECT count(*) FROM invalid_records WHERE data IS NOT NULL AND (occupation IS NULL OR gender IS NULL)"
+        )).scalar() or 0
+        logger.info(f"Canonical backfill scope: {total_valid:,} valid + {total_invalid:,} invalid rows")
+        if total_valid + total_invalid == 0:
+            _update_task("All columns already backfilled. No action needed.", 100, "completed")
+            return
+        # ── PHASE 1: valid_records ──
+        processed, last_id = 0, 0
+        _update_task(f"Phase 1/2: Backfilling {total_valid:,} valid records...", 5)
+        while True:
+            if _is_cancelled():
+                return
+            result = db.execute(text(UPDATE_SQL.format(table="valid_records")), {"last_id": last_id, "lim": CHUNK})
+            db.commit()
+            ids = result.fetchall()
+            if not ids:
+                break
+            last_id = max(r[0] for r in ids)
+            processed += len(ids)
+            pct = 5 + int((processed / max(total_valid, 1)) * 44)
+            _update_task(f"Phase 1/2: valid records ({processed:,}/{total_valid:,})", min(pct, 49))
+        # ── PHASE 2: invalid_records ──
+        inv_processed, last_id = 0, 0
+        _update_task(f"Phase 2/2: Backfilling {total_invalid:,} invalid records...", 50)
+        while True:
+            if _is_cancelled():
+                return
+            result = db.execute(text(UPDATE_SQL.format(table="invalid_records")), {"last_id": last_id, "lim": CHUNK})
+            db.commit()
+            ids = result.fetchall()
+            if not ids:
+                break
+            last_id = max(r[0] for r in ids)
+            inv_processed += len(ids)
+            pct = 50 + int((inv_processed / max(total_invalid, 1)) * 48)
+            _update_task(f"Phase 2/2: invalid records ({inv_processed:,}/{total_invalid:,})", min(pct, 98))
+        msg = f"Done! {processed:,} valid + {inv_processed:,} invalid rows backfilled."
+        logger.info(f"Canonical backfill complete: {msg}")
+        _update_task(msg, 100, "completed")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Canonical backfill failed: {e}")
+        if task_id:
+            try:
+                t = db.query(BackgroundTask).filter(BackgroundTask.id == task_id).first()
+                if t:
+                    t.status, t.error_details = "error", str(e)
+                    db.commit()
+            except Exception:
+                pass
 
 
 def _seed_geo_data_if_empty(db: Session):
@@ -383,26 +561,36 @@ def _seed_permissions_if_empty(db: Session):
     try:
         if db.query(Permission).count() == 0:
             perms = [
-                ("upload_data", "Can upload and validate Excel files"),
-                ("view_stats", "Can view statistics and dashboard"),
-                ("view_geo", "Can view geographical hierarchy"),
-                ("view_admin", "Can view administrative settings"),
-                ("manage_users", "Can create/edit users"),
-                ("manage_geo", "Can edit geographical data"),
+                ("upload_data",    "Can upload and validate Excel files"),
+                ("view_stats",     "Can view statistics and dashboard"),
+                ("view_geo",       "Can view geographical hierarchy"),
+                ("view_admin",     "Can view administrative settings"),
+                ("manage_users",   "Can create/edit users"),
+                ("manage_geo",     "Can edit geographical data"),
+                ("manage_records", "Can edit, add, and verify beneficiary records"),
             ]
             for name, desc in perms:
                 db.add(Permission(name=name, description=desc))
 
             role_map = {
-                "admin": [p[0] for p in perms],
-                "uploader": ["upload_data", "view_stats", "view_geo"],
-                "viewer": ["view_stats", "view_geo"],
+                "admin":    [p[0] for p in perms],
+                "uploader": ["upload_data", "view_stats", "view_geo", "manage_records"],
+                "viewer":   ["view_stats", "view_geo"],
             }
             for role, pnames in role_map.items():
                 for pname in pnames:
                     db.add(RolePermission(role=role, permission_name=pname))
             db.commit()
             logger.info("Seeded permissions and role mappings.")
+        else:
+            # Additive: ensure manage_records exists for existing deployments
+            existing_names = {p[0] for p in db.query(Permission.name).all()}
+            if "manage_records" not in existing_names:
+                db.add(Permission(name="manage_records", description="Can edit, add, and verify beneficiary records"))
+                for role in ["admin", "uploader"]:
+                    db.add(RolePermission(role=role, permission_name="manage_records"))
+                db.commit()
+                logger.info("Added manage_records permission to existing deployment.")
     except Exception as e:
         db.rollback()
         logger.error(f"Error seeding permissions: {e}")
@@ -536,6 +724,372 @@ def _sync_header_aliases(db: Session):
         db.rollback()
         logger.error(f"Error syncing header aliases from JSON: {e}")
 
+
+def _normalize_json_keys(db, task_id: str = None):
+    """
+    Background admin task: Normalizes JSON keys across all valid_records and invalid_records.
+    Reads all header aliases from the DB, and injects canonical keys into data json
+    if their original counterparts exist. Preserves original keys.
+    """
+    import json
+    from .models import HeaderAlias, BackgroundTask, SystemConfig
+
+    def _update_task(msg: str, pct: int, status: str = "running"):
+        if not task_id:
+            return
+        try:
+            t = db.query(BackgroundTask).filter(BackgroundTask.id == task_id).first()
+            if t:
+                t.status = status
+                t.progress = pct
+                t.message = msg
+                db.commit()
+        except Exception:
+            db.rollback()
+
+    def _is_cancelled() -> bool:
+        if not task_id:
+            return False
+        try:
+            db.expire_all()
+            t = db.query(BackgroundTask).filter(BackgroundTask.id == task_id).first()
+            return t is None or t.status == "error"
+        except Exception:
+            return False
+
+    try:
+        flag = db.query(SystemConfig).filter(SystemConfig.key == "json_keys_normalized_v1").first()
+        if flag and flag.value == "true":
+            _update_task("Keys already normalized. No further action needed.", 100, "completed")
+            return
+
+        _update_task("Loading header aliases from database...", 1)
+        
+        # Build mapping: original -> canonical (whitespace-agnostic)
+        aliases = db.query(HeaderAlias).all()
+        alias_map = {re.sub(r'\s+', ' ', a.original_header).strip(): a.canonical_key for a in aliases if a.original_header.strip()}
+        
+        logger.info(f"Loaded {len(alias_map)} header aliases for normalization.")
+
+        _update_task("Computing row counts...", 2)
+        total_valid = db.execute(text("SELECT count(*) FROM valid_records WHERE data IS NOT NULL")).scalar() or 0
+        total_invalid = db.execute(text("SELECT count(*) FROM invalid_records WHERE data IS NOT NULL")).scalar() or 0
+        total_records = total_valid + total_invalid
+        
+        if total_records == 0:
+            _update_task("No records to normalize.", 100, "completed")
+            return
+
+        CHUNK_SIZE = 10000
+        processed = 0
+
+        # Process valid_records
+        last_id = 0
+        _update_task(f"Normalizing valid records (0/{total_valid:,})...", 5)
+        while True:
+            if _is_cancelled():
+                logger.info("Normalization cancelled by user.")
+                return
+
+            rows = db.execute(text("""
+                SELECT id, data FROM valid_records 
+                WHERE data IS NOT NULL AND id > :last_id 
+                ORDER BY id ASC LIMIT :lim
+            """), {"last_id": last_id, "lim": CHUNK_SIZE}).fetchall()
+
+            if not rows:
+                break
+
+            updates = []
+            for r in rows:
+                if not r.data or not isinstance(r.data, dict):
+                    continue
+                
+                d = r.data
+                changed = False
+                for k, v in list(d.items()):
+                    if not k: continue
+                    # Whitespace-agnostic cleaning to match aliases with newlines/tabs
+                    clean_k = re.sub(r'\s+', ' ', k).strip()
+                    if clean_k in alias_map:
+                        canonical = alias_map[clean_k]
+                        # only add if canonical not already present
+                        if canonical not in d:
+                            d[canonical] = v
+                            changed = True
+
+                if changed:
+                    updates.append({"id": r.id, "data": json.dumps(d)})
+            
+            if updates:
+                db.execute(text("UPDATE valid_records SET data = CAST(:data AS JSONB) WHERE id = :id"), updates)
+                db.commit()
+
+            last_id = max(r.id for r in rows)
+            processed += len(rows)
+            pct = 5 + int((processed / total_records) * 90)
+            _update_task(f"Normalizing valid records... ({processed:,}/{total_valid:,})", min(pct, 95))
+            logger.info(f"Normalized {processed}/{total_records} records")
+
+        # Process invalid_records
+        last_id = 0
+        while True:
+            if _is_cancelled():
+                logger.info("Normalization cancelled by user.")
+                return
+
+            rows = db.execute(text("""
+                SELECT id, data FROM invalid_records 
+                WHERE data IS NOT NULL AND id > :last_id 
+                ORDER BY id ASC LIMIT :lim
+            """), {"last_id": last_id, "lim": CHUNK_SIZE}).fetchall()
+
+            if not rows:
+                break
+
+            updates = []
+            for r in rows:
+                if not r.data or not isinstance(r.data, dict):
+                    continue
+                
+                d = r.data
+                changed = False
+                for k, v in list(d.items()):
+                    if not k: continue
+                    # Whitespace-agnostic cleaning to match aliases with newlines/tabs
+                    clean_k = re.sub(r'\s+', ' ', k).strip()
+                    if clean_k in alias_map:
+                        canonical = alias_map[clean_k]
+                        if canonical not in d:
+                            d[canonical] = v
+                            changed = True
+
+                if changed:
+                    updates.append({"id": r.id, "data": json.dumps(d)})
+            
+            if updates:
+                db.execute(text("UPDATE invalid_records SET data = CAST(:data AS JSONB) WHERE id = :id"), updates)
+                db.commit()
+
+            last_id = max(r.id for r in rows)
+            # note: 'processed' includes valid + invalid for total progress
+            processed += len(rows)
+            # count specifically for message
+            inv_count = processed - total_valid
+            pct = 5 + int((processed / total_records) * 90)
+            _update_task(f"Normalizing invalid records... ({inv_count:,}/{total_invalid:,})", min(pct, 95))
+
+        # Mark done
+        existing_flag = db.query(SystemConfig).filter(SystemConfig.key == "json_keys_normalized_v1").first()
+        if existing_flag:
+            existing_flag.value = "true"
+        else:
+            db.add(SystemConfig(key="json_keys_normalized_v1", value="true", description="Data JSON canonical keys injected"))
+        db.commit()
+
+        _update_task(f"Success! Normalized {total_records:,} records.", 100, "completed")
+
+    except Exception as e:
+        db.rollback()
+        logger.error(f"JSON normalization failed: {e}")
+        if task_id:
+            try:
+                t = db.query(BackgroundTask).filter(BackgroundTask.id == task_id).first()
+                if t:
+                    t.status = "error"
+                    t.error_details = str(e)
+                    db.commit()
+            except Exception:
+                pass
+
+
+def _migrate_dealers_from_json(db: Session, task_id: str = None):
+    """
+    Background admin task: blazing-fast JSONB set-based backfill.
+    Relies entirely on CANONICAL keys injected by _normalize_json_keys.
+    Extracts dealer info + promoted columns from the data JSON inside PostgreSQL.
+    """
+    from .models import SystemConfig, Dealer, BackgroundTask
+
+    def _update_task(msg: str, pct: int, status: str = "running"):
+        if not task_id:
+            return
+        try:
+            t = db.query(BackgroundTask).filter(BackgroundTask.id == task_id).first()
+            if t:
+                t.status = status
+                t.progress = pct
+                t.message = msg
+                db.commit()
+        except Exception:
+            db.rollback()
+
+    def _is_cancelled() -> bool:
+        if not task_id:
+            return False
+        try:
+            db.expire_all()
+            t = db.query(BackgroundTask).filter(BackgroundTask.id == task_id).first()
+            return t is None or t.status == "error"
+        except Exception:
+            return False
+
+    try:
+        # Note: lockout check removed in v2.0 to allow 'Force Refresh' via Admin UI
+        # flag = db.query(SystemConfig).filter(SystemConfig.key == "dealers_migrated_v1").first()
+        # if flag and flag.value == "true":
+        #    ...
+
+        logger.info("Starting SQL-native dealer migration (Canonical fast-path)...")
+        _update_task("Computing row counts...", 1)
+
+        # Treat empty string ('') as NULL to allow backfilling incomplete records
+        total_valid   = db.execute(text("SELECT count(*) FROM valid_records WHERE (name_bn IS NULL OR name_bn = '') AND data IS NOT NULL")).scalar() or 0
+        total_invalid = db.execute(text("SELECT count(*) FROM invalid_records WHERE (name_bn IS NULL OR name_bn = '') AND data IS NOT NULL")).scalar() or 0
+        total_records = total_valid + total_invalid
+        logger.info(f"Migration scope: {total_valid} valid + {total_invalid} invalid = {total_records} rows")
+
+        # ── PHASE 1: Backfill promoted columns on valid_records (Canonical Only) ──
+        _update_task(f"Phase 1/3: Backfilling {total_valid:,} valid records...", 5)
+        CHUNK = 20_000
+        processed = 0
+        last_id = 0
+
+        while True:
+            if _is_cancelled():
+                logger.info("Migration cancelled by user.")
+                return
+
+            result = db.execute(text("""
+                UPDATE valid_records SET
+                    name_bn = COALESCE(NULLIF(TRIM(data->>'name_bn'), ''), NULLIF(TRIM(data->>'name_bn_en'), '')),
+                    name_en = COALESCE(NULLIF(TRIM(data->>'name_en'), ''), NULLIF(TRIM(data->>'name_en_en'), '')),
+                    father_husband_name = COALESCE(father_husband_name, NULLIF(TRIM(data->>'father_husband_name'), ''), NULLIF(TRIM(data->>'spouse_name'), '')),
+                    ward = COALESCE(ward, NULLIF(TRIM(data->>'ward'), '')),
+                    union_name = COALESCE(union_name, NULLIF(TRIM(data->>'union_name'), ''))
+                WHERE id IN (
+                    SELECT id FROM valid_records
+                    WHERE (name_bn IS NULL OR name_bn = '') AND data IS NOT NULL AND id > :last_id
+                    ORDER BY id ASC LIMIT :lim
+                )
+                RETURNING id
+            """), {"last_id": last_id, "lim": CHUNK})
+            db.commit()
+
+            updated_ids = result.fetchall()
+            if not updated_ids:
+                break
+
+            last_id = max(r[0] for r in updated_ids)
+            processed += len(updated_ids)
+            pct = 5 + int((processed / max(total_records, 1)) * 40)
+            _update_task(f"Phase 1/3: Backfilling valid records... ({processed:,}/{total_valid:,})", min(pct, 44))
+
+        # ── PHASE 2: Create dealers + link back in one set-based pass (Canonical) ──
+        _update_task("Phase 2/3: Extracting & inserting NEW dealers from JSON data...", 45)
+
+        db.execute(text("""
+            INSERT INTO dealers (nid, name, mobile, upazila, district, division,
+                                 upazila_id, district_id, division_id, created_at)
+            SELECT DISTINCT ON (nid_val, upazila_id)
+                nid_val AS nid,
+                COALESCE(NULLIF(name_val, ''), 'Unknown') AS name,
+                mobile_val AS mobile,
+                upazila, district, division,
+                upazila_id, district_id, division_id,
+                NOW()
+            FROM (
+                SELECT
+                    NULLIF(TRIM(data->>'dealer_nid'), '') AS nid_val,
+                    TRIM(data->>'dealer_name') AS name_val,
+                    NULLIF(TRIM(data->>'dealer_mobile'), '') AS mobile_val,
+                    upazila, district, division,
+                    upazila_id, district_id, division_id
+                FROM valid_records
+                WHERE upazila_id IS NOT NULL AND data IS NOT NULL
+            ) sub
+            WHERE nid_val IS NOT NULL
+            ON CONFLICT (nid, upazila_id) DO NOTHING
+        """))
+        db.commit()
+        
+        _update_task("Phase 2/3: Linking dealers to records (matching by Geo + NID)...", 70)
+
+        db.execute(text("""
+            UPDATE valid_records vr
+            SET dealer_id = d.id
+            FROM dealers d
+            WHERE vr.dealer_id IS NULL
+              AND d.upazila_id = vr.upazila_id
+              AND d.nid = NULLIF(TRIM(vr.data->>'dealer_nid'), '')
+        """))
+        db.commit()
+        
+        _update_task("Phase 2/3: Dealer link complete.", 80)
+
+        # ── PHASE 3: Backfill invalid_records (Canonical Only) ──────────────────────
+        _update_task(f"Phase 3/3: Backfilling {total_invalid:,} invalid records...", 82)
+        inv_processed = 0
+        last_inv_id = 0
+
+        while True:
+            if _is_cancelled():
+                logger.info("Migration cancelled by user.")
+                return
+
+            result = db.execute(text("""
+                UPDATE invalid_records SET
+                    name_bn = COALESCE(NULLIF(TRIM(data->>'name_bn'), ''), NULLIF(TRIM(data->>'name_bn_en'), '')),
+                    name_en = COALESCE(NULLIF(TRIM(data->>'name_en'), ''), NULLIF(TRIM(data->>'name_en_en'), '')),
+                    father_husband_name = COALESCE(father_husband_name, NULLIF(TRIM(data->>'father_husband_name'), ''), NULLIF(TRIM(data->>'spouse_name'), '')),
+                    ward = COALESCE(ward, NULLIF(TRIM(data->>'ward'), '')),
+                    union_name = COALESCE(union_name, NULLIF(TRIM(data->>'union_name'), ''))
+                WHERE id IN (
+                    SELECT id FROM invalid_records
+                    WHERE (name_bn IS NULL OR name_bn = '') AND data IS NOT NULL AND id > :last_id
+                    ORDER BY id ASC LIMIT :lim
+                )
+                RETURNING id
+            """), {"last_id": last_inv_id, "lim": CHUNK})
+            db.commit()
+
+            updated_ids = result.fetchall()
+            if not updated_ids:
+                break
+
+            last_inv_id = max(r[0] for r in updated_ids)
+            inv_processed += len(updated_ids)
+            pct = 82 + int((inv_processed / max(total_invalid, 1)) * 16)
+            _update_task(f"Phase 3/3: Backfilling invalid records... ({inv_processed:,}/{total_invalid:,})", min(pct, 98))
+
+        # ── Mark complete ──────────────────────────────────────────────────────────
+        existing_flag = db.query(SystemConfig).filter(SystemConfig.key == "dealers_migrated_v1").first()
+        if existing_flag:
+            existing_flag.value = "true"
+        else:
+            db.add(SystemConfig(
+                key="dealers_migrated_v1",
+                value="true",
+                description="One-time dealer extraction and column backfill completed"
+            ))
+        db.commit()
+
+        summary = f"Done! {processed:,} valid + {inv_processed:,} invalid rows backfilled."
+        logger.info(f"Migration complete: {summary}")
+        _update_task(summary, 100, "completed")
+
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Dealer migration failed: {e}")
+        if task_id:
+            try:
+                t = db.query(BackgroundTask).filter(BackgroundTask.id == task_id).first()
+                if t:
+                    t.status = "error"
+                    t.error_details = str(e)
+                    db.commit()
+            except Exception:
+                db.rollback()
 
 def _migrate_json_to_db(db: Session):
     """One-time migration from legacy JSON stats file to DB."""
@@ -682,6 +1236,7 @@ from . import sync_routes
 from . import geo_routes
 from . import audit_routes
 from . import alias_routes
+from . import records_routes
 
 # API Routes v2.0 (Modular)
 app.include_router(auth_routes.router, prefix="/auth")
@@ -695,7 +1250,8 @@ app.include_router(task_routes.router, prefix="/tasks", tags=["tasks"])
 app.include_router(sync_routes.router, prefix="/sync", tags=["sync"])
 app.include_router(geo_routes.router, prefix="/geo", tags=["geo"])
 app.include_router(audit_routes.router, prefix="/audit", tags=["audit"])
-app.include_router(alias_routes.router)  # prefix is defined inside the router
+app.include_router(alias_routes.router)  # prefix defined inside router
+app.include_router(records_routes.router, prefix="/records", tags=["records"])
 
 
 # ─────────────────────────────────────────────────────────────────────────────

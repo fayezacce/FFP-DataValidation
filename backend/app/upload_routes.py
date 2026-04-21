@@ -378,10 +378,74 @@ def run_validation_task(
 
         if insert_data:
             from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+            # ── Helper: extract a value from data_dict by trying multiple key candidates ──
+            def _pick_from_dict(d: dict, *keys) -> str:
+                for k in keys:
+                    v = d.get(k)
+                    if v and str(v).strip():
+                        return str(v).strip()
+                return ""
+
+            # ── Collect unique dealers from this upload ──
+            from .models import Dealer
+
+            dealer_nid_to_id: dict[tuple, int] = {}
+            unique_dealers: dict[tuple, dict] = {}
+            for row_data in insert_data:
+                d = row_data["data"]
+                d_nid = _pick_from_dict(d, "dealer_nid", "Dealer_NID", "ডিলার এনআইডি")
+                if d_nid and upazila_id:
+                    key = (d_nid, upazila_id)
+                    if key not in unique_dealers:
+                        unique_dealers[key] = {
+                            "nid":        d_nid,
+                            "name":       _pick_from_dict(d, "dealer_name", "Dealer_Name", "ডিলারের নাম") or "Unknown",
+                            "mobile":     _pick_from_dict(d, "dealer_mobile", "Dealer_Mobile"),
+                            "division":   geo["division"], "district": geo["district"], "upazila": geo["upazila"],
+                            "division_id": div_id, "district_id": dist_id, "upazila_id": upazila_id,
+                        }
+
+            # Upsert dealers (update name + mobile on conflict)
+            if unique_dealers:
+                dealer_stmt = pg_insert(Dealer).values(list(unique_dealers.values()))
+                dealer_stmt = dealer_stmt.on_conflict_do_update(
+                    constraint="uix_dealer_nid_upazila",
+                    set_={"name": dealer_stmt.excluded.name, "mobile": dealer_stmt.excluded.mobile,
+                          "updated_at": dealer_stmt.excluded.updated_at}
+                ).returning(Dealer.id, Dealer.nid, Dealer.upazila_id)
+                dealer_rows = db.execute(dealer_stmt).fetchall()
+                db.commit()
+                dealer_nid_to_id = {(r.nid, r.upazila_id): r.id for r in dealer_rows}
+
+            # Enrich insert_data with promoted columns + dealer_id before bulk upsert
+            for row_data in insert_data:
+                d = row_data["data"]
+                row_data["father_husband_name"] = _pick_from_dict(
+                    d, "father_husband_name", "পিতা / স্বামীর নাম", "পিতার নাম", "Father_Name")
+                row_data["name_bn"]     = _pick_from_dict(d, "name_bn", "নাম (বাংলা)", "বাংলা নাম")
+                row_data["name_en"]     = _pick_from_dict(d, "name_en", "Name_EN", "নাম (ইংরেজি)")
+                row_data["ward"]        = _pick_from_dict(d, "ward", "ওয়ার্ড নং", "Ward_No")
+                row_data["union_name"]  = _pick_from_dict(d, "union_name", "ইউনিয়ন", "Union")
+                # ── New canonical columns ──
+                row_data["occupation"]  = _pick_from_dict(d, "occupation", "পেশা")
+                row_data["gender"]      = _pick_from_dict(d, "gender", "লিঙ্গ")
+                row_data["religion"]    = _pick_from_dict(d, "religion", "ধর্ম")
+                row_data["address"]     = _pick_from_dict(d, "address", "গ্রামের নাম", "গ্রাম", "ঠিকানা")
+                row_data["spouse_name"] = _pick_from_dict(d, "spouse_name", "স্বামী/স্ত্রীর নাম (NID সাথে মিল থাকতে হবে)")
+                row_data["spouse_nid"]  = _pick_from_dict(d, "spouse_nid", "স্বামী/স্ত্রী জাতীয় পরিচয় নম্বর")
+                row_data["spouse_dob"]  = _pick_from_dict(d, "spouse_dob", "স্বামী/স্ত্রী জন্ম তারিখ (NID সাথে মিল থাকতে হবে)")
+                row_data["verification_status"] = "unverified"
+
+                d_nid = _pick_from_dict(d, "dealer_nid", "Dealer_NID", "ডিলার এনআইডি")
+                if d_nid and upazila_id and (d_nid, upazila_id) in dealer_nid_to_id:
+                    row_data["dealer_id"] = dealer_nid_to_id[(d_nid, upazila_id)]
+
             for i in range(0, len(insert_data), 2000):
                 stmt = pg_insert(ValidRecord).values(insert_data[i : i + 2000])
                 stmt = stmt.on_conflict_do_update(index_elements=["nid"], set_={k: getattr(stmt.excluded, k) for k in insert_data[0].keys() if k != "nid"})
                 db.execute(stmt)
+
 
         invalid_rows_final = processed_df[processed_df["Status"] == "error"]
         invalid_insert = []

@@ -146,6 +146,9 @@ export default function AdminPage() {
   const [isImporting, setIsImporting] = useState(false);
   const [selectedSqlFile, setSelectedSqlFile] = useState<File | null>(null);
   const [dbTasks, setDbTasks] = useState<any[]>([]);
+  const [migrationTask, setMigrationTask] = useState<any | null>(null);
+  const [normalizeTask, setNormalizeTask] = useState<any | null>(null);
+  const [backfillTask,  setBackfillTask]  = useState<any | null>(null);
 
   // --- User Management ---
   const [loading, setLoading] = useState(true);
@@ -173,10 +176,11 @@ export default function AdminPage() {
             const statusData = await res.json();
             setMaintenanceStatus(statusData);
             
-            // Clear loading state when background task finishes
-            const cleanupDone = statusData.cleanup?.status === 'completed' || statusData.cleanup?.status === 'error';
-            const deleteDone = statusData.delete?.status !== 'running';
-            const repairGeoDone = statusData.repair_geo?.status === 'completed' || statusData.repair_geo?.status === 'error';
+            // Clear loading state when background task finishes or is idle
+            const cleanupDone = !statusData.cleanup || statusData.cleanup.status === 'completed' || statusData.cleanup.status === 'error' || statusData.cleanup.status === 'idle';
+            const deleteDone = !statusData.delete || statusData.delete.status !== 'running';
+            const repairGeoDone = !statusData.repair_geo || statusData.repair_geo.status === 'completed' || statusData.repair_geo.status === 'error' || statusData.repair_geo.status === 'idle';
+            
             if (cleanupDone && deleteDone && repairGeoDone) {
               setMaintenanceLoading(false);
             }
@@ -187,6 +191,15 @@ export default function AdminPage() {
           if (tasksRes.ok) {
             const data = await tasksRes.json();
             setDbTasks(data.filter((t: any) => t.task_name === 'db_backup' || t.task_name === 'db_restore'));
+            
+            // Define task names
+            const MIGRATION_TASK_NAME = 'Dealer & Configuration Backfill Migration';
+            const NORMALIZE_TASK_NAME = 'JSON Key Normalization';
+            const BACKFILL_TASK_NAME  = 'Backfill Canonical Columns';
+
+            setMigrationTask(data.find((t: any) => t.task_name === MIGRATION_TASK_NAME) || null);
+            setNormalizeTask(data.find((t: any) => t.task_name === NORMALIZE_TASK_NAME) || null);
+            setBackfillTask(data.find((t: any)  => t.task_name === BACKFILL_TASK_NAME)  || null);
           }
 
           if (activeTab === 'database') {
@@ -826,6 +839,234 @@ export default function AdminPage() {
               >
                 {maintenanceLoading ? 'Refreshing...' : '📊 Refresh All Stats from Truth Tables'}
               </button>
+            </div>
+
+            {/* JSON Key Normalization Panel */}
+            <div className="bg-[#121214] border border-fuchsia-600/30 p-6 rounded-2xl">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xl">🔤</span>
+                <h2 className="text-xl font-bold text-fuchsia-300">4. Normalize JSON Keys</h2>
+              </div>
+              <p className="text-xs text-gray-400 mb-1">
+                Reads all <code>data</code> fields and injects canonical keys (e.g. <code>dealer_nid</code>) based on the HeaderAlias mapping. Original Bengali keys are preserved. Required before Dealer Migration.
+              </p>
+              
+              <button
+                onClick={async () => {
+                  if (!confirm('Start JSON Key Normalization? This process runs in the background and processes thousands of rows.')) return;
+                  try {
+                    const res = await fetchWithAuth(`${getBackendUrl()}/admin/maintenance/normalize-json-keys`, { method: 'POST' });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.detail || data.error || 'Normalization trigger failed');
+                    showMsg('JSON Key Normalization task queued.');
+                  } catch (err: any) { showMsg(err.message, true); }
+                }}
+                disabled={normalizeTask?.status === 'pending' || normalizeTask?.status === 'running'}
+                className="w-full py-3 rounded-xl bg-fuchsia-700 hover:bg-fuchsia-600 font-bold disabled:opacity-50 mt-3 transition-colors text-white"
+              >
+                {normalizeTask?.status === 'running' ? 'Normalization in Progress...' : '🔤 Start JSON Key Normalization'}
+              </button>
+              
+              {/* Normalize Task Status Visuals */}
+              {normalizeTask && (normalizeTask.status === 'running' || normalizeTask.status === 'pending') && (
+                <div className="mt-4 p-4 rounded-xl bg-fuchsia-500/10 border border-fuchsia-500/20">
+                  <div className="flex justify-between items-center mb-1">
+                    <p className="text-fuchsia-400 font-bold text-sm">
+                      {normalizeTask.status === 'pending' ? '⏳ Queued...' : '⚡ Normalization Running...'}
+                    </p>
+                    <div className="flex items-center gap-3">
+                      <span className="text-fuchsia-300 font-bold text-sm tabular-nums">{normalizeTask.progress || 0}%</span>
+                      <button
+                        onClick={async () => {
+                          if (!confirm('Cancel the normalization task? Progress made so far will be kept.')) return;
+                          try {
+                            const res = await fetchWithAuth(`${getBackendUrl()}/tasks/${normalizeTask.id}`, { method: 'DELETE' });
+                            if (res.ok) {
+                              setNormalizeTask(null);
+                              showMsg('Normalization task cancelled.');
+                            } else {
+                              const d = await res.json().catch(() => ({}));
+                              showMsg(d.detail || 'Failed to cancel task', true);
+                            }
+                          } catch (err: any) { showMsg(err.message, true); }
+                        }}
+                        className="px-3 py-1 text-xs font-semibold rounded-lg bg-red-500/20 border border-red-500/30 text-red-400 hover:bg-red-500/30 hover:text-red-300 transition-colors"
+                      >
+                        ✕ Cancel
+                      </button>
+                    </div>
+                  </div>
+                  <div className="w-full bg-[#1a1a1c] h-2 rounded-full overflow-hidden mb-2">
+                    <div 
+                      className="bg-fuchsia-500 h-full transition-all duration-500" 
+                      style={{ width: `${normalizeTask.progress || 0}%` }}
+                    ></div>
+                  </div>
+                  <p className="text-gray-400 text-xs">{normalizeTask.message}</p>
+                </div>
+              )}
+            </div>
+
+            {/* Dealer Data Migration Panel */}
+            <div className="bg-[#121214] border border-blue-600/30 p-6 rounded-2xl">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xl">🛠️</span>
+                <h2 className="text-xl font-bold text-blue-300">5. Migrate Dealers & Configuration Data</h2>
+              </div>
+              <p className="text-xs text-gray-400 mb-1">
+                Relies entirely on Canonical Keys to permanently extract dealer names and normalize invalid records for fast system matching. Required when importing raw JSON legacy databases.
+              </p>
+              
+              <button
+                onClick={async () => {
+                  if (!confirm('Start full database backfill migration? This process runs in the background and processes thousands of rows.')) return;
+                  try {
+                    const res = await fetchWithAuth(`${getBackendUrl()}/admin/maintenance/migrate-dealers`, { method: 'POST' });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.detail || data.error || 'Migration trigger failed');
+                    showMsg('Database Migration task queued successfully.');
+                  } catch (err: any) { showMsg(err.message, true); }
+                }}
+                disabled={migrationTask?.status === 'pending' || migrationTask?.status === 'running' || normalizeTask?.status === 'running'}
+                className="w-full py-3 rounded-xl bg-blue-700 hover:bg-blue-600 font-bold disabled:opacity-50 mt-3 transition-colors text-white"
+              >
+                {migrationTask?.status === 'running' ? 'Migration in Progress...' : '🛠️ Start Full Configuration Migration'}
+              </button>
+              
+              {/* Migration Task Status Visuals */}
+              {migrationTask && (migrationTask.status === 'running' || migrationTask.status === 'pending') && (
+                <div className="mt-4 p-4 rounded-xl bg-blue-500/10 border border-blue-500/20">
+                  <div className="flex justify-between items-center mb-1">
+                    <p className="text-blue-400 font-bold text-sm">
+                      {migrationTask.status === 'pending' ? '⏳ Queued...' : '⚡ Migration Running...'}
+                    </p>
+                    <div className="flex items-center gap-3">
+                      <span className="text-blue-300 font-bold text-sm tabular-nums">{migrationTask.progress || 0}%</span>
+                      <button
+                        onClick={async () => {
+                          if (!confirm('Cancel the migration task? Progress made so far will be kept — you can restart later.')) return;
+                          try {
+                            const res = await fetchWithAuth(`${getBackendUrl()}/tasks/${migrationTask.id}`, { method: 'DELETE' });
+                            if (res.ok) {
+                              setMigrationTask(null);
+                              showMsg('Migration task cancelled.');
+                            } else {
+                              const d = await res.json().catch(() => ({}));
+                              showMsg(d.detail || 'Failed to cancel task', true);
+                            }
+                          } catch (err: any) { showMsg(err.message, true); }
+                        }}
+                        className="px-3 py-1 text-xs font-semibold rounded-lg bg-red-500/20 border border-red-500/30 text-red-400 hover:bg-red-500/30 hover:text-red-300 transition-colors"
+                      >
+                        ✕ Cancel
+                      </button>
+                    </div>
+                  </div>
+                  <div className="w-full bg-[#1a1a1c] h-2 rounded-full overflow-hidden mb-2">
+                    <div 
+                      className="bg-gradient-to-r from-blue-600 to-indigo-500 h-full transition-all duration-700" 
+                      style={{ width: `${migrationTask.progress || 0}%` }}
+                    ></div>
+                  </div>
+                  <p className="text-slate-400 text-xs mt-1">{migrationTask.message}</p>
+                </div>
+              )}
+              
+              {migrationTask?.status === 'completed' && (
+                <div className="mt-4 p-3 rounded-lg border bg-emerald-500/10 border-emerald-500/20">
+                  <p className="font-bold mb-1 text-emerald-400">✅ Migration Task Completed</p>
+                  <p className="text-gray-400 text-xs">{migrationTask.message}</p>
+                </div>
+              )}
+              
+              {migrationTask?.status === 'error' && (
+                <div className="mt-4 p-3 rounded-lg border bg-red-500/10 border-red-500/20">
+                  <p className="font-bold mb-1 text-red-400">❌ Migration Error</p>
+                  <p className="text-gray-400 text-xs">{migrationTask.error_details || migrationTask.message}</p>
+                </div>
+              )}
+            </div>
+
+            {/* Task 6: Backfill Canonical Columns Panel */}
+            <div className="bg-[#121214] border border-purple-600/30 p-6 rounded-2xl">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xl">🧬</span>
+                <h2 className="text-xl font-bold text-purple-300">6. Backfill Canonical Columns</h2>
+              </div>
+              <p className="text-xs text-gray-400 mb-1">
+                Promotes <strong className="text-white">occupation, gender, religion, address, spouse name/NID/DOB</strong> from the raw JSON field into dedicated indexed database columns.
+                Run this after <strong className="text-white">Task 4</strong> for blazing-fast queries and exports on all existing records.
+              </p>
+              <p className="text-xs text-amber-400/80 mb-3">⚡ Pure SQL — processes 20,000 rows per chunk. Safe to run on production with millions of records.</p>
+
+              <button
+                onClick={async () => {
+                  if (!confirm('Start canonical column backfill? This is safe for production and can be cancelled at any time.')) return;
+                  try {
+                    const res = await fetchWithAuth(`${getBackendUrl()}/admin/maintenance/backfill-canonical`, { method: 'POST' });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.detail || data.error || 'Backfill trigger failed');
+                    showMsg('Canonical column backfill task queued successfully.');
+                  } catch (err: any) { showMsg(err.message, true); }
+                }}
+                disabled={backfillTask?.status === 'pending' || backfillTask?.status === 'running'}
+                className="w-full py-3 rounded-xl bg-purple-700 hover:bg-purple-600 font-bold disabled:opacity-50 mt-1 transition-colors text-white"
+              >
+                {backfillTask?.status === 'running' ? 'Backfill in Progress...' : '🧬 Start Canonical Column Backfill'}
+              </button>
+
+              {/* Backfill Task Status Visuals */}
+              {backfillTask && (backfillTask.status === 'running' || backfillTask.status === 'pending') && (
+                <div className="mt-4 p-4 rounded-xl bg-purple-500/10 border border-purple-500/20">
+                  <div className="flex justify-between items-center mb-1">
+                    <p className="text-purple-400 font-bold text-sm">
+                      {backfillTask.status === 'pending' ? '⏳ Queued...' : '⚡ Backfill Running...'}
+                    </p>
+                    <div className="flex items-center gap-3">
+                      <span className="text-purple-300 font-bold text-sm tabular-nums">{backfillTask.progress || 0}%</span>
+                      <button
+                        onClick={async () => {
+                          if (!confirm('Cancel the backfill task? Progress made so far will be kept — you can restart later.')) return;
+                          try {
+                            const res = await fetchWithAuth(`${getBackendUrl()}/tasks/${backfillTask.id}`, { method: 'DELETE' });
+                            if (res.ok) {
+                              setBackfillTask(null);
+                              showMsg('Backfill task cancelled.');
+                            } else {
+                              const d = await res.json().catch(() => ({}));
+                              showMsg(d.detail || 'Failed to cancel task', true);
+                            }
+                          } catch (err: any) { showMsg(err.message, true); }
+                        }}
+                        className="px-3 py-1 text-xs font-semibold rounded-lg bg-red-500/20 border border-red-500/30 text-red-400 hover:bg-red-500/30 hover:text-red-300 transition-colors"
+                      >
+                        ✕ Cancel
+                      </button>
+                    </div>
+                  </div>
+                  <div className="w-full bg-[#1a1a1c] h-2 rounded-full overflow-hidden mb-2">
+                    <div
+                      className="bg-gradient-to-r from-purple-600 to-fuchsia-500 h-full transition-all duration-700"
+                      style={{ width: `${backfillTask.progress || 0}%` }}
+                    ></div>
+                  </div>
+                  <p className="text-slate-400 text-xs mt-1">{backfillTask.message}</p>
+                </div>
+              )}
+
+              {backfillTask?.status === 'completed' && (
+                <div className="mt-4 p-3 rounded-lg border bg-emerald-500/10 border-emerald-500/20">
+                  <p className="font-bold mb-1 text-emerald-400">✅ Backfill Completed</p>
+                  <p className="text-gray-400 text-xs">{backfillTask.message}</p>
+                </div>
+              )}
+
+              {backfillTask?.status === 'error' && (
+                <div className="mt-4 p-3 rounded-lg border bg-red-500/10 border-red-500/20">
+                  <p className="font-bold mb-1 text-red-400">❌ Backfill Error</p>
+                  <p className="text-gray-400 text-xs">{backfillTask.error_details || backfillTask.message}</p>
+                </div>
+              )}
             </div>
 
             {/* Delete Unresolved Panel — shown only when scan found orphans */}

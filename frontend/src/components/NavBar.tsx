@@ -32,9 +32,11 @@ export default function NavBar() {
   if (pathname === "/login") return null;
 
   const navLinks = [
-    { name: "Upload", href: "/" },
-    { name: "Search", href: "/search" },
-    { name: "Statistics", href: "/statistics" },
+    { name: "Upload",          href: "/"              },
+    { name: "Search",          href: "/search"        },
+    { name: "Statistics",      href: "/statistics"    },
+    { name: "Beneficiaries",   href: "/beneficiaries" },
+    { name: "Dealers",         href: "/dealers"       },
   ];
 
   if (user && user.role === "admin") {

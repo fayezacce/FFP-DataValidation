@@ -6,8 +6,9 @@ import React, { useState } from "react";
 import { 
   ChevronRight, ChevronDown, MapPin, CheckCircle2, FileWarning, 
   Clock, FileSpreadsheet, FileText, Download, Square, CheckSquare, MinusSquare,
-  BarChart3, Edit2, Trash2, Loader2
+  BarChart3, Edit2, Trash2, Loader2, Users
 } from "lucide-react";
+import Link from "next/link";
 import { StatsEntry } from "@/types/ffp";
 
 interface StatsTableProps {
@@ -192,13 +193,37 @@ const StatsTable: React.FC<StatsTableProps> = ({
                             <MapPin className="w-3 h-3 text-slate-700 mx-auto" />
                           </td>
                           <td className="px-6 py-4 pl-16">
-                            <span className="font-bold text-white group-hover/row:text-emerald-400 transition-colors uppercase tracking-tight">{upz.upazila}</span>
+                            <Link
+                              href={`/beneficiaries?filter=valid&division=${encodeURIComponent(upz.division)}&district=${encodeURIComponent(upz.district)}&upazila=${encodeURIComponent(upz.upazila)}`}
+                              className="font-bold text-white hover:text-emerald-400 transition-colors uppercase tracking-tight underline-offset-2 hover:underline"
+                              title={`View beneficiaries in ${upz.upazila}`}
+                            >
+                              {upz.upazila}
+                            </Link>
                           </td>
                           <td className="px-4 py-4 text-center text-sm font-medium text-slate-500">{upz.quota.toLocaleString()}</td>
                           <td className="px-4 py-4 text-center text-sm font-medium text-slate-400">{upz.total.toLocaleString()}</td>
-                          <td className="px-4 py-4 text-center text-sm font-bold text-emerald-500/70">{upz.valid.toLocaleString()}</td>
+                          <td className="px-4 py-4 text-center text-sm font-bold text-emerald-500/70">
+                            <Link
+                              href={`/beneficiaries?filter=valid&division=${encodeURIComponent(upz.division)}&district=${encodeURIComponent(upz.district)}&upazila=${encodeURIComponent(upz.upazila)}`}
+                              className="hover:text-emerald-400 hover:underline transition-colors flex items-center justify-center gap-1"
+                              title="View valid beneficiaries"
+                            >
+                              <Users className="w-3 h-3" />{upz.valid.toLocaleString()}
+                            </Link>
+                          </td>
                           <td className="px-4 py-4 text-center text-sm font-bold text-amber-500/70">{getRemaining(upz.quota, upz.valid)}</td>
-                          <td className="px-4 py-4 text-center text-sm font-bold text-red-500/70">{upz.invalid.toLocaleString()}</td>
+                          <td className="px-4 py-4 text-center text-sm font-bold text-red-500/70">
+                            {upz.invalid > 0 ? (
+                              <Link
+                                href={`/beneficiaries?filter=invalid&division=${encodeURIComponent(upz.division)}&district=${encodeURIComponent(upz.district)}&upazila=${encodeURIComponent(upz.upazila)}`}
+                                className="hover:text-red-400 hover:underline transition-colors"
+                                title="View invalid records"
+                              >
+                                {upz.invalid.toLocaleString()}
+                              </Link>
+                            ) : <span>{upz.invalid.toLocaleString()}</span>}
+                          </td>
                           <td className="px-6 py-4">
                             <div className="flex items-center justify-center gap-2">
                               {/* Action Tools: Downloads with loading states */}

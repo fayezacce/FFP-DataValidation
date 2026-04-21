@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Float, Index, JSON, UniqueConstraint, Boolean
+from sqlalchemy import Column, Integer, String, DateTime, Float, Index, JSON, UniqueConstraint, Boolean, Text
 from .database import Base
 from datetime import datetime, timezone
 
@@ -165,6 +165,29 @@ class UploadBatch(Base):
     column_headers = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=_utcnow)
 
+class Dealer(Base):
+    """Unique dealer registry per upazila. Each dealer serves N beneficiaries."""
+    __tablename__ = "dealers"
+
+    id           = Column(Integer, primary_key=True, index=True)
+    nid          = Column(String, index=True, nullable=False)   # Dealer's own NID
+    name         = Column(String, nullable=False)
+    mobile       = Column(String, nullable=True)
+    division     = Column(String, index=True)
+    district     = Column(String, index=True)
+    upazila      = Column(String, index=True)
+    division_id  = Column(Integer, index=True, nullable=True)
+    district_id  = Column(Integer, index=True, nullable=True)
+    upazila_id   = Column(Integer, index=True, nullable=True)
+    is_active    = Column(Boolean, default=True)
+    created_at   = Column(DateTime, default=_utcnow)
+    updated_at   = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('nid', 'upazila_id', name='uix_dealer_nid_upazila'),
+    )
+
+
 class ValidRecord(Base):
     __tablename__ = "valid_records"
 
@@ -179,11 +202,32 @@ class ValidRecord(Base):
     district_id = Column(Integer, index=True, nullable=True)
     upazila_id = Column(Integer, index=True, nullable=True)
     source_file = Column(String)
-    batch_id = Column(Integer, index=True) # Linked to upload_batches.id
-    upload_batch = Column(Integer, default=1)  # Keeping this for legacy compatibility (as version)
-    card_no = Column(String, index=True) # Unique card number for upazila
-    mobile = Column(String, index=True) # Secondary identifier
-    data = Column(JSON)  # Stores all original Excel fields
+    batch_id = Column(Integer, index=True)        # Linked to upload_batches.id
+    upload_batch = Column(Integer, default=1)     # Legacy version field
+    card_no = Column(String, index=True)
+    mobile = Column(String, index=True)
+    data = Column(JSON)                           # Full original Excel row (Bangla keys) — used by export pipeline
+    # ── Promoted fast-access columns (extracted from data JSON at upload time) ──
+    father_husband_name = Column(String, index=True, nullable=True)
+    name_bn  = Column(String, nullable=True)      # Bangla name
+    name_en  = Column(String, nullable=True)      # English name
+    ward     = Column(String, nullable=True)
+    union_name = Column(String, nullable=True)
+    # ── Dealer FK ──
+    dealer_id = Column(Integer, index=True, nullable=True)  # FK → dealers.id
+    # ── Standard Canonical Fields (promoted from data JSON) ──
+    occupation  = Column(String, nullable=True)
+    gender      = Column(String, nullable=True)
+    religion    = Column(String, nullable=True)
+    address     = Column(String, nullable=True)   # গ্রামের নাম / village
+    spouse_name = Column(String, nullable=True)
+    spouse_nid  = Column(String, nullable=True)
+    spouse_dob  = Column(String, nullable=True)
+    # ── Verification workflow ──
+    verification_status = Column(String, default='unverified', index=True)  # unverified | verified
+    verified_by_id  = Column(Integer, nullable=True)   # user.id of verifying officer
+    verified_by     = Column(String, nullable=True)    # denormalized username (like AuditLog pattern)
+    verified_at     = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
@@ -194,6 +238,9 @@ class ValidRecord(Base):
         Index('ix_valid_record_batch', 'upload_batch'),
         Index('ix_valid_record_batch_id', 'batch_id'),
         Index('ix_valid_upazila_nid', 'upazila_id', 'nid'),
+        Index('ix_valid_record_father', 'father_husband_name'),
+        Index('ix_valid_record_verification', 'verification_status'),
+        Index('ix_valid_record_dealer', 'dealer_id'),
         # Trigram indexes for fast global search (requires pg_trgm)
         Index('ix_valid_record_nid_trgm', 'nid', postgresql_using='gist', postgresql_ops={'nid': 'gist_trgm_ops'}),
         Index('ix_valid_record_name_trgm', 'name', postgresql_using='gist', postgresql_ops={'name': 'gist_trgm_ops'}),
@@ -220,6 +267,23 @@ class InvalidRecord(Base):
     mobile = Column(String, index=True) # Secondary identifier
     error_message = Column(String)  # The validation failure reason
     data = Column(JSON)  # Stores all original Excel fields
+    
+    # ── Promoted fast-access columns (for consistency with ValidRecord) ──
+    father_husband_name = Column(String, index=True, nullable=True)
+    name_bn  = Column(String, nullable=True)
+    name_en  = Column(String, nullable=True)
+    ward     = Column(String, nullable=True)
+    union_name = Column(String, nullable=True)
+    dealer_id = Column(Integer, index=True, nullable=True)
+    # ── Standard Canonical Fields (promoted from data JSON) ──
+    occupation  = Column(String, nullable=True)
+    gender      = Column(String, nullable=True)
+    religion    = Column(String, nullable=True)
+    address     = Column(String, nullable=True)
+    spouse_name = Column(String, nullable=True)
+    spouse_nid  = Column(String, nullable=True)
+    spouse_dob  = Column(String, nullable=True)
+
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 

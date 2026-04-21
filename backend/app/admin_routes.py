@@ -910,15 +910,21 @@ def run_cleanup_background(db_session_factory, task_id: str, user_id: int, usern
                 db.commit()
         
         # 2. Bulk Backfill IDs using JOIN (High Performance)
-        task.message = "Backfilling IDs using canonical geo data..."
-        db.commit()
         backfilled = 0
         tables = ["valid_records", "invalid_records", "summary_stats", "upload_batches"]
-        from .stats_utils import refresh_summary_stats
-        for idx, tbl in enumerate(tables):
-            task.progress = 50 + int((idx / 4) * 50)
-            db.commit()
+        
+        # We have 4 tables and each has 6 backfill steps (Upz, Upz-Alias, Dist, Dist-Alias, Div, Div-Alias)
+        # Total steps = 24
+        total_backfill_steps = len(tables) * 6
+        current_step = 0
+
+        for tbl in tables:
             # 1. Match by Upazila + District (most precise)
+            current_step += 1
+            task.progress = 50 + int((current_step / total_backfill_steps) * 50)
+            task.message = f"Matching Upazila IDs for {tbl} (Direct Match)..."
+            db.commit()
+
             sql_upz = f"""
                 UPDATE {tbl} t
                 SET upazila_id = u.id
@@ -932,6 +938,11 @@ def run_cleanup_background(db_session_factory, task_id: str, user_id: int, usern
             db.commit()
 
             # 1.5 Match Upazila via Aliases
+            current_step += 1
+            task.progress = 50 + int((current_step / total_backfill_steps) * 50)
+            task.message = f"Matching Upazila IDs for {tbl} (Alias Match)..."
+            db.commit()
+
             sql_upz_alias = f"""
                 UPDATE {tbl} t
                 SET upazila_id = a.target_id
@@ -945,6 +956,11 @@ def run_cleanup_background(db_session_factory, task_id: str, user_id: int, usern
             db.commit()
             
             # 2. Match by District
+            current_step += 1
+            task.progress = 50 + int((current_step / total_backfill_steps) * 50)
+            task.message = f"Matching District IDs for {tbl} (Direct Match)..."
+            db.commit()
+
             sql_dist = f"""
                 UPDATE {tbl} t
                 SET district_id = d.id
@@ -957,6 +973,11 @@ def run_cleanup_background(db_session_factory, task_id: str, user_id: int, usern
             db.commit()
 
             # 2.5 Match District via Aliases
+            current_step += 1
+            task.progress = 50 + int((current_step / total_backfill_steps) * 50)
+            task.message = f"Matching District IDs for {tbl} (Alias Match)..."
+            db.commit()
+
             sql_dist_alias = f"""
                 UPDATE {tbl} t
                 SET district_id = a.target_id
@@ -970,6 +991,11 @@ def run_cleanup_background(db_session_factory, task_id: str, user_id: int, usern
             db.commit()
             
             # 3. Match by Division
+            current_step += 1
+            task.progress = 50 + int((current_step / total_backfill_steps) * 50)
+            task.message = f"Matching Division IDs for {tbl} (Direct Match)..."
+            db.commit()
+
             sql_div = f"""
                 UPDATE {tbl} t
                 SET division_id = dv.id
@@ -982,6 +1008,11 @@ def run_cleanup_background(db_session_factory, task_id: str, user_id: int, usern
             db.commit()
 
             # 3.5 Match Division via Aliases
+            current_step += 1
+            task.progress = 50 + int((current_step / total_backfill_steps) * 50)
+            task.message = f"Matching Division IDs for {tbl} (Alias Match)..."
+            db.commit()
+
             sql_div_alias = f"""
                 UPDATE {tbl} t
                 SET division_id = a.target_id
@@ -1063,8 +1094,8 @@ def run_repair_geo_ids_background(db_session_factory, task_id: str, user_id: int
     try:
         tables = ["valid_records", "invalid_records", "summary_stats", "upload_batches"]
         for idx, tbl in enumerate(tables):
-            task.progress = int((idx / 4) * 100)
-            task.message = f"Repairing IDs for {tbl}..."
+            task.progress = int((idx / len(tables)) * 90)
+            task.message = f"Repairing Geographic IDs for {tbl} (High-performance set matching)..."
             db.commit()
             
             # Re-assign upazila_id, district_id, division_id for every row by name match.
@@ -1349,3 +1380,86 @@ async def get_api_usage(limit: int = 100, db: Session = Depends(get_db)):
     """Admin-only: Retrieve API usage logs."""
     return db.query(ApiUsageLog).order_by(ApiUsageLog.created_at.desc()).limit(limit).all()
 
+@router.post("/maintenance/normalize-json-keys", dependencies=[Depends(PermissionChecker("view_admin"))])
+async def trigger_normalize_json_keys(background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from .models import BackgroundTask
+    import uuid
+
+    task_id = str(uuid.uuid4())
+    task = BackgroundTask(
+        id=task_id,
+        user_id=current_user.id,
+        task_name="JSON Key Normalization",
+        status="pending",
+        message="Initializing JSON key normalization..."
+    )
+    db.add(task)
+    db.commit()
+
+    def _normalize_task_wrapper(tid: str):
+        from .database import SessionLocal
+        from .main import _normalize_json_keys
+        with SessionLocal() as session:
+            _normalize_json_keys(session, tid)
+
+    background_tasks.add_task(_normalize_task_wrapper, task_id)
+    log_audit(db, current_user, "MAINTENANCE", "json_normalization", 0, new_data={"task_id": task_id})
+
+    return {"message": "Background normalization task initiated.", "task_id": task_id}
+
+@router.post("/maintenance/migrate-dealers", dependencies=[Depends(PermissionChecker("view_admin"))])
+async def trigger_dealer_migration(background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from .models import BackgroundTask
+    import uuid
+    
+    task_id = str(uuid.uuid4())
+    task = BackgroundTask(
+        id=task_id,
+        user_id=current_user.id,
+        task_name="Dealer & Configuration Backfill Migration",
+        status="pending",
+        message="Initializing global database backfill..."
+    )
+    db.add(task)
+    db.commit()
+    
+    def _migrate_task_wrapper(tid: str):
+        from .database import SessionLocal
+        from .main import _migrate_dealers_from_json
+        with SessionLocal() as session:
+            _migrate_dealers_from_json(session, tid)
+            
+    background_tasks.add_task(_migrate_task_wrapper, task_id)
+    log_audit(db, current_user, "MAINTENANCE", "dealers_migration", 0, new_data={"task_id": task_id})
+    
+    return {"message": "Background migration task initiated.", "task_id": task_id}
+
+
+
+@router.post("/maintenance/backfill-canonical", dependencies=[Depends(PermissionChecker("view_admin"))])
+async def trigger_backfill_canonical(background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Task 6: Backfill 7 new canonical columns from data JSONB into dedicated DB columns. Requires Task 4 to have run first."""
+    from .models import BackgroundTask
+    import uuid
+
+    task_id = str(uuid.uuid4())
+    task = BackgroundTask(
+        id=task_id,
+        user_id=current_user.id,
+        task_name="Backfill Canonical Columns",
+        status="pending",
+        message="Initializing canonical column backfill..."
+    )
+    db.add(task)
+    db.commit()
+
+    def _backfill_wrapper(tid: str):
+        from .database import SessionLocal
+        from .main import _backfill_canonical_columns
+        with SessionLocal() as session:
+            _backfill_canonical_columns(session, tid)
+
+    background_tasks.add_task(_backfill_wrapper, task_id)
+    log_audit(db, current_user, "MAINTENANCE", "canonical_backfill", 0, new_data={"task_id": task_id})
+
+    return {"message": "Canonical column backfill task initiated.", "task_id": task_id}
