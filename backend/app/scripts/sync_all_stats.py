@@ -1,3 +1,7 @@
+"""
+Synchronizes all stats across FFP platform
+Author: Fayez Ahmed, Assistant Programmer, DG Food
+"""
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 import os

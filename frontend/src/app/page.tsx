@@ -1,4 +1,8 @@
 "use client";
+/**
+ * FFP Data Validator - Home Page
+ * Author: Fayez Ahmed, Assistant Programmer, DG Food
+ */
 
 import React, { useState, useCallback, useRef, useEffect } from "react";
 import Link from "next/link";

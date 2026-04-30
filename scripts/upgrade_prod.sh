@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # FFP Data Validation Platform — Production Upgrade Script
+# Author: Fayez Ahmed, Assistant Programmer, DG Food
 # =============================================================================
 # Upgrades from commit 0cfa198 ("Fix: Restrict columns in Download All Invalid PDF")
 # to the current latest code.

@@ -1,6 +1,6 @@
 """
 FFP Data Validator API
-Author: Fayez Ahmed
+Author: Fayez Ahmed, Assistant Programmer, DG Food
 
 Slim app factory — all route handlers live in dedicated modules.
 """
