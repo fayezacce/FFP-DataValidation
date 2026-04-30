@@ -148,7 +148,7 @@ run_task() {
 }
 
 # 5a. Geo ID backfill
-run_task "Geo ID backfill" "app/scripts/backfill_geo_ids.py"
+run_task "Geo ID backfill" "backfill_geo_ids.py"
 
 # 5b. Mobile column extraction
 run_task "Mobile number backfill" "app/scripts/backfill_columns.py"
