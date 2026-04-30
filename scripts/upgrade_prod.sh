@@ -3,7 +3,7 @@
 # FFP Data Validation Platform — Production Upgrade Script
 # =============================================================================
 # Upgrades from commit 0cfa198 ("Fix: Restrict columns in Download All Invalid PDF")
-# to the current latest code (v2.0.0 Modular Architecture).
+# to the current latest code.
 #
 # Usage (on prod server, from the repo root):
 #   chmod +x scripts/upgrade_prod.sh
@@ -30,6 +30,20 @@ info()  { echo -e "${GREEN}[INFO]${NC}  $*" | tee -a "$LOG_FILE"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC}  $*" | tee -a "$LOG_FILE"; }
 error() { echo -e "${RED}[ERROR]${NC} $*" | tee -a "$LOG_FILE"; exit 1; }
 
+# ── Argument Parsing ────────────────────────────────────────────────────────
+RESTORE_FILE=""
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --restore)
+      RESTORE_FILE="$2"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
 info "=== FFP Platform Upgrade — $(date) ==="
 
 # ── Step 0: Pre-flight checks ────────────────────────────────────────────────
@@ -42,13 +56,38 @@ command -v git     >/dev/null 2>&1 || error "Git is not installed"
 
 # Check the DB is currently running
 docker compose -f "$COMPOSE_FILE" ps "$DB_SERVICE" | grep -q "running\|healthy" \
-  || warn "Database container does not appear healthy. Continuing anyway..."
+  || error "Database container MUST be running to perform upgrade/restore. Run 'docker compose -f $COMPOSE_FILE up -d db' first."
+
+source .env  # load POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB
+
+# ── Step 0.5: Optional Restore ──────────────────────────────────────────────
+if [[ -n "$RESTORE_FILE" ]]; then
+    if [[ ! -f "$RESTORE_FILE" ]]; then
+        error "Restore file not found: $RESTORE_FILE"
+    fi
+    info "--- Step 0.5: Restoring database from $RESTORE_FILE ---"
+    warn "This will DROP all existing data in the public schema!"
+    
+    # Stop backend to prevent locks
+    docker compose -f "$COMPOSE_FILE" stop "$BACKEND_SERVICE" frontend || true
+    
+    info "Cleaning public schema..."
+    docker compose -f "$COMPOSE_FILE" exec -T "$DB_SERVICE" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+        -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public; GRANT ALL ON SCHEMA public TO public;"
+    
+    info "Running restore (this may take a while for large files)..."
+    if [[ "$RESTORE_FILE" == *.gz ]]; then
+        gunzip -c "$RESTORE_FILE" | docker compose -f "$COMPOSE_FILE" exec -T "$DB_SERVICE" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+    else
+        cat "$RESTORE_FILE" | docker compose -f "$COMPOSE_FILE" exec -T "$DB_SERVICE" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+    fi
+    info "Restore complete."
+fi
 
 # ── Step 1: Create safety DB snapshot ───────────────────────────────────────
 info "--- Step 1: Creating pre-upgrade DB snapshot ---"
 mkdir -p "$BACKUP_DIR"
 
-source .env  # load POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB
 SNAPSHOT_FILE="${BACKUP_DIR}/pre_upgrade_${TIMESTAMP}.tar.gz"
 
 docker compose -f "$COMPOSE_FILE" exec -T "$DB_SERVICE" \

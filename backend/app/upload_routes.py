@@ -339,7 +339,6 @@ def run_validation_task(
         current_version = (summary.version + 1) if summary else 1
 
         # ── Build index → original-row lookup from raw_df_copy for O(1) access ──
-        # raw_df_copy has original Bangla column names and original cell values.
         raw_index_map = {idx: raw_df_copy.loc[idx].where(pd.notna(raw_df_copy.loc[idx]), None).to_dict()
                          for idx in raw_df_copy.index}
 
@@ -357,8 +356,6 @@ def run_validation_task(
                 existing_map[nid] = True
 
             # Build data dict using original Bangla keys + internal validator fields.
-            # This is the key fix: downstream exports reconstruct the original file
-            # using these original Bangla keys without any reverse-mapping needed.
             data_dict = dict(raw_index_map.get(idx, {}))
             data_dict["Status"]         = row.get("Status", "success")
             data_dict["Cleaned_NID"]    = row.get("Cleaned_NID", "")
@@ -367,25 +364,42 @@ def run_validation_task(
             data_dict["Message"]        = row.get("Message", "")
             data_dict["Extracted_Name"] = row.get("Extracted_Name", "")
 
+            # ── Extract Canonical Fields Directly from Mapped Row ──
+            # row is a Series with index = canonical keys (from process_dataframe renaming)
+            def _get_val(k, fallback=""):
+                v = row.get(k)
+                return str(v).strip() if v is not None and pd.notna(v) else fallback
+
             insert_data.append({
                 "nid": nid, "dob": row.get("Cleaned_DOB", ""), "name": row.get("Extracted_Name", "Unknown"),
                 "division": geo["division"], "district": geo["district"], "upazila": geo["upazila"],
                 "division_id": div_id, "district_id": dist_id, "upazila_id": upazila_id,
-                "card_no": row.get("Card_No", ""), "mobile": str(row.get("Mobile", "")).strip() if pd.notna(row.get("Mobile")) else "",
+                "card_no": _get_val("card_no", str(row.get("Card_No", ""))), 
+                "mobile": _get_val("mobile", str(row.get("Mobile", ""))),
                 "source_file": batch.filename, "batch_id": batch.id, "upload_batch": current_version,
-                "data": data_dict, "updated_at": datetime.now(timezone.utc)
+                "data": data_dict, "updated_at": datetime.now(timezone.utc),
+                # Promoted columns
+                "father_husband_name": _get_val("father_husband_name"),
+                "name_bn":     _get_val("name_bn"),
+                "name_en":     _get_val("name_en"),
+                "ward":        _get_val("ward"),
+                "union_name":  _get_val("union_name"),
+                "occupation":  _get_val("occupation"),
+                "gender":      _get_val("gender"),
+                "religion":    _get_val("religion"),
+                "address":     _get_val("address"),
+                "spouse_name": _get_val("spouse_name"),
+                "spouse_nid":  _get_val("spouse_nid"),
+                "spouse_dob":  _get_val("spouse_dob"),
+                "verification_status": "unverified",
+                # Temporary storage for dealer info to be processed in next step
+                "_dealer_nid": _get_val("dealer_nid"),
+                "_dealer_name": _get_val("dealer_name", "Unknown"),
+                "_dealer_mobile": _get_val("dealer_mobile"),
             })
 
         if insert_data:
             from sqlalchemy.dialects.postgresql import insert as pg_insert
-
-            # ── Helper: extract a value from data_dict by trying multiple key candidates ──
-            def _pick_from_dict(d: dict, *keys) -> str:
-                for k in keys:
-                    v = d.get(k)
-                    if v and str(v).strip():
-                        return str(v).strip()
-                return ""
 
             # ── Collect unique dealers from this upload ──
             from .models import Dealer
@@ -393,15 +407,14 @@ def run_validation_task(
             dealer_nid_to_id: dict[tuple, int] = {}
             unique_dealers: dict[tuple, dict] = {}
             for row_data in insert_data:
-                d = row_data["data"]
-                d_nid = _pick_from_dict(d, "dealer_nid", "Dealer_NID", "ডিলার এনআইডি")
+                d_nid = row_data.get("_dealer_nid")
                 if d_nid and upazila_id:
                     key = (d_nid, upazila_id)
                     if key not in unique_dealers:
                         unique_dealers[key] = {
                             "nid":        d_nid,
-                            "name":       _pick_from_dict(d, "dealer_name", "Dealer_Name", "ডিলারের নাম") or "Unknown",
-                            "mobile":     _pick_from_dict(d, "dealer_mobile", "Dealer_Mobile"),
+                            "name":       row_data.get("_dealer_name") or "Unknown",
+                            "mobile":     row_data.get("_dealer_mobile"),
                             "division":   geo["division"], "district": geo["district"], "upazila": geo["upazila"],
                             "division_id": div_id, "district_id": dist_id, "upazila_id": upazila_id,
                         }
@@ -418,26 +431,11 @@ def run_validation_task(
                 db.commit()
                 dealer_nid_to_id = {(r.nid, r.upazila_id): r.id for r in dealer_rows}
 
-            # Enrich insert_data with promoted columns + dealer_id before bulk upsert
+            # Map dealer_id to records and cleanup temp fields
             for row_data in insert_data:
-                d = row_data["data"]
-                row_data["father_husband_name"] = _pick_from_dict(
-                    d, "father_husband_name", "পিতা / স্বামীর নাম", "পিতার নাম", "Father_Name")
-                row_data["name_bn"]     = _pick_from_dict(d, "name_bn", "নাম (বাংলা)", "বাংলা নাম")
-                row_data["name_en"]     = _pick_from_dict(d, "name_en", "Name_EN", "নাম (ইংরেজি)")
-                row_data["ward"]        = _pick_from_dict(d, "ward", "ওয়ার্ড নং", "Ward_No")
-                row_data["union_name"]  = _pick_from_dict(d, "union_name", "ইউনিয়ন", "Union")
-                # ── New canonical columns ──
-                row_data["occupation"]  = _pick_from_dict(d, "occupation", "পেশা")
-                row_data["gender"]      = _pick_from_dict(d, "gender", "লিঙ্গ")
-                row_data["religion"]    = _pick_from_dict(d, "religion", "ধর্ম")
-                row_data["address"]     = _pick_from_dict(d, "address", "গ্রামের নাম", "গ্রাম", "ঠিকানা")
-                row_data["spouse_name"] = _pick_from_dict(d, "spouse_name", "স্বামী/স্ত্রীর নাম (NID সাথে মিল থাকতে হবে)")
-                row_data["spouse_nid"]  = _pick_from_dict(d, "spouse_nid", "স্বামী/স্ত্রী জাতীয় পরিচয় নম্বর")
-                row_data["spouse_dob"]  = _pick_from_dict(d, "spouse_dob", "স্বামী/স্ত্রী জন্ম তারিখ (NID সাথে মিল থাকতে হবে)")
-                row_data["verification_status"] = "unverified"
-
-                d_nid = _pick_from_dict(d, "dealer_nid", "Dealer_NID", "ডিলার এনআইডি")
+                d_nid = row_data.pop("_dealer_nid", None)
+                row_data.pop("_dealer_name", None)
+                row_data.pop("_dealer_mobile", None)
                 if d_nid and upazila_id and (d_nid, upazila_id) in dealer_nid_to_id:
                     row_data["dealer_id"] = dealer_nid_to_id[(d_nid, upazila_id)]
 
@@ -459,13 +457,33 @@ def run_validation_task(
             data_dict["Message"]        = row.get("Message", "")
             data_dict["Extracted_Name"] = row.get("Extracted_Name", "")
 
+            # ── Promote Columns for InvalidRecord as well ──
+            def _get_val(k, fallback=""):
+                v = row.get(k)
+                return str(v).strip() if v is not None and pd.notna(v) else fallback
+
             invalid_insert.append({
                 "nid": str(row.get("Cleaned_NID", "")).strip(), "dob": row.get("Cleaned_DOB", ""), "name": row.get("Extracted_Name", "Unknown"),
                 "division": geo["division"], "district": geo["district"], "upazila": geo["upazila"],
                 "division_id": div_id, "district_id": dist_id, "upazila_id": upazila_id,
-                "card_no": row.get("Card_No", ""), "master_serial": row.get("Master_Serial", ""), "mobile": row.get("Mobile", ""),
+                "card_no": _get_val("card_no", str(row.get("Card_No", ""))), 
+                "master_serial": _get_val("master_serial", str(row.get("Master_Serial", ""))), 
+                "mobile": _get_val("mobile", str(row.get("Mobile", ""))),
                 "source_file": batch.filename, "batch_id": batch.id, "upload_batch": current_version, "error_message": str(row.get("Message", "Unknown")),
-                "data": data_dict
+                "data": data_dict,
+                # Promoted columns
+                "father_husband_name": _get_val("father_husband_name"),
+                "name_bn":     _get_val("name_bn"),
+                "name_en":     _get_val("name_en"),
+                "ward":        _get_val("ward"),
+                "union_name":  _get_val("union_name"),
+                "occupation":  _get_val("occupation"),
+                "gender":      _get_val("gender"),
+                "religion":    _get_val("religion"),
+                "address":     _get_val("address"),
+                "spouse_name": _get_val("spouse_name"),
+                "spouse_nid":  _get_val("spouse_nid"),
+                "spouse_dob":  _get_val("spouse_dob"),
             })
         if invalid_insert:
             # ── Delete existing invalid records for this upazila before re-inserting ──

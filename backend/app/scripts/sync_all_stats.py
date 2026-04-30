@@ -3,8 +3,15 @@ from sqlalchemy.orm import Session
 import os
 import sys
 
-# Add the current directory to sys.path so we can import .models and .stats_utils
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add /app (the container root — parent of the 'app' package) to sys.path
+# so that 'from app.database import ...' resolves whether this script is run
+# as 'python /app/app/scripts/sync_all_stats.py' or as a module.
+_script_dir = os.path.dirname(os.path.abspath(__file__))          # .../scripts
+_app_pkg    = os.path.dirname(_script_dir)                         # .../app
+_container_root = os.path.dirname(_app_pkg)                        # /app
+for _p in [_container_root, _app_pkg]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 try:
     from app.database import SessionLocal

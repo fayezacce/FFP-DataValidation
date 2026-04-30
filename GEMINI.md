@@ -105,6 +105,7 @@ SSL terminated by upstream nginx (not this stack)
 - Phase 3: Test coverage expansion (Validator + all API integration tests)
 - Phase 4: Frontend modularization (Extracted tables, cards, and admin tabs)
 - Phase 5: Production Hardening (Multi-tenancy, Async Upload Queue, Analytics, Audit, Bangla UI, Mobile Responsive)
+- Phase 6: Production Schema Upgrade (Backfilled canonical columns, mobile numbers, and geo IDs, upgraded header aliases mapping)
 
 ### 🔲 Remaining
 - None. System is ready for production deployment.

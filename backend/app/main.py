@@ -341,8 +341,21 @@ def migrate_schema(db: Session):
         db.execute(text("ALTER TABLE geo_aliases DROP CONSTRAINT IF EXISTS geo_aliases_alias_name_key"))
         # Drop index created by unique=True
         db.execute(text("DROP INDEX IF EXISTS ix_geo_aliases_alias_name"))
-        # Create new composite unique constraint
-        db.execute(text("ALTER TABLE geo_aliases ADD CONSTRAINT _alias_target_uc UNIQUE (alias_name, target_type, target_id)"))
+        # Create new composite unique constraint — idempotent via pg_constraint check
+        db.execute(text("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = '_alias_target_uc'
+                      AND conrelid = 'geo_aliases'::regclass
+                ) THEN
+                    ALTER TABLE geo_aliases
+                        ADD CONSTRAINT _alias_target_uc UNIQUE (alias_name, target_type, target_id);
+                END IF;
+            END
+            $$;
+        """))
         db.commit()
         logger.info("Migrated geo_aliases to composite unique constraint.")
     except Exception:
@@ -687,39 +700,37 @@ def _sync_header_aliases(db: Session):
     """Sync hardcoded aliases from header_mapping.json into the header_aliases table."""
     from .models import HeaderAlias, SystemConfig
     try:
-        # OPTIMIZATION: Check if sync has already been completed persistently
-        sync_flag = db.query(SystemConfig).filter(SystemConfig.key == "header_aliases_synced_v1").first()
-        if sync_flag and sync_flag.value == "true":
-            return
-
         mapping_path = os.path.join(os.path.dirname(__file__), "header_mapping.json")
         if os.path.exists(mapping_path):
             with open(mapping_path, "r", encoding="utf-8") as f:
                 mapping = json.load(f)
             
             created_count = 0
-            # Get all existing headers in one go for efficiency
-            existing_headers = {h[0] for h in db.query(HeaderAlias.original_header).all()}
+            updated_count = 0
+            
+            # Get all existing headers for quick lookup
+            existing = {h.original_header: h for h in db.query(HeaderAlias).all()}
             
             for original_header, canonical_key in mapping.items():
-                if original_header not in existing_headers:
+                if original_header in existing:
+                    # Update if changed
+                    if existing[original_header].canonical_key != canonical_key:
+                        existing[original_header].canonical_key = canonical_key
+                        updated_count += 1
+                else:
+                    # Add new
                     db.add(HeaderAlias(
                         original_header=original_header,
                         canonical_key=canonical_key
                     ))
-                    existing_headers.add(original_header) 
                     created_count += 1
             
-            if created_count > 0:
+            if created_count > 0 or updated_count > 0:
                 db.commit()
-                logger.info(f"Synchronized {created_count} new header aliases from JSON mapping to database.")
+                logger.info(f"Header aliases sync: {created_count} added, {updated_count} updated.")
             
-            # Mark as completed
-            if not sync_flag:
-                db.add(SystemConfig(key="header_aliases_synced_v1", value="true", description="Initial header alias seed completed"))
-                db.commit()
-            else:
-                logger.info("Header aliases are already up-to-date with JSON mapping.")
+            # We don't rely on the flag anymore to allow updates
+            # (or we can just keep it for first-run logic but we want updates to work)
     except Exception as e:
         db.rollback()
         logger.error(f"Error syncing header aliases from JSON: {e}")

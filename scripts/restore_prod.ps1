@@ -24,8 +24,14 @@ Write-Host "[2/5] Cleaning existing database tables..."
 docker compose -f docker-compose.prod.yml exec -T db psql -U fayez -d ffp_validator -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public; GRANT ALL ON SCHEMA public TO public;"
 if ($LASTEXITCODE -ne 0) { Write-Host "❌ Failed to clean database."; exit 1 }
 
-Write-Host "[3/5] Restoring database from file (this may take a while)..."
-docker compose -f docker-compose.prod.yml exec -T db psql -U fayez -d ffp_validator -f /tmp/restore.sql --set ON_ERROR_STOP=off
+Write-Host "[3/5] Restoring database from file (this may take a while for large files)..."
+if ($SqlFile.EndsWith(".gz")) {
+    # If GZ, we pipe gunzip content to psql
+    # NOTE: This assumes gunzip is available in the shell or we use docker to unzip
+    docker compose -f docker-compose.prod.yml exec -T db sh -c "gunzip -c /tmp/restore.sql.gz | psql -U fayez -d ffp_validator"
+} else {
+    docker compose -f docker-compose.prod.yml exec -T db psql -U fayez -d ffp_validator -f /tmp/restore.sql --set ON_ERROR_STOP=off
+}
 # Ignore exit code here as pg_dump usually throws benign notices on restore
 
 Write-Host "[4/5] Cleaning up temp file..."
