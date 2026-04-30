@@ -101,7 +101,7 @@ docker compose -f "$COMPOSE_FILE" exec -T "$DB_SERVICE" \
 
 # ── Step 2: Git pull ─────────────────────────────────────────────────────────
 info "--- Step 2: Pulling latest code ---"
-git pull --ff-only origin main \
+git pull --ff-only origin master \
   || error "Git pull failed. Resolve conflicts then re-run."
 
 # ── Step 3: Build new Docker images (no cache to pick up new pip packages) ──
@@ -148,16 +148,16 @@ run_task() {
 }
 
 # 5a. Geo ID backfill
-run_task "Geo ID backfill" "/app/backfill_geo_ids.py"
+run_task "Geo ID backfill" "app/scripts/backfill_geo_ids.py"
 
 # 5b. Mobile column extraction
-run_task "Mobile number backfill" "/app/app/scripts/backfill_columns.py"
+run_task "Mobile number backfill" "app/scripts/backfill_columns.py"
 
 # 5c. Summary stats sync
-run_task "Summary stats sync" "/app/app/scripts/sync_all_stats.py"
+run_task "Summary stats sync" "app/scripts/sync_all_stats.py"
 
 # 5d. Repair Stale Geo IDs
-run_task "Repair stale geo IDs" "/app/app/scripts/repair_geo_ids_prod.py"
+run_task "Repair stale geo IDs" "app/scripts/repair_geo_ids_prod.py"
 
 # ── Step 6: Restart Services ───────────────────────────────────────────────
 info "--- Step 6: Restarting Services ---"
