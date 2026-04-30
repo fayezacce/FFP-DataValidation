@@ -213,7 +213,11 @@ def run_validation_task(
             contents = f.read()
 
         tz_limit_conf = db.query(SystemConfig).filter(SystemConfig.key == "trailing_zero_limit").first()
-        tz_limit = int(tz_limit_conf.value) if tz_limit_conf and tz_limit_conf.value.isdigit() else 0
+        # Default to 2 if missing/invalid, but allow the user to set 0 to disable
+        if tz_limit_conf and tz_limit_conf.value and tz_limit_conf.value.strip().isdigit():
+            tz_limit = int(tz_limit_conf.value.strip())
+        else:
+            tz_limit = 2
 
         tz_whitelist_records = db.query(TrailingZeroWhitelist.nid).all()
         tz_whitelist = {r[0] for r in tz_whitelist_records}
@@ -605,7 +609,11 @@ async def preview_validation(
     contents = await file.read()
     try:
         tz_limit_conf = db.query(SystemConfig).filter(SystemConfig.key == "trailing_zero_limit").first()
-        tz_limit = int(tz_limit_conf.value) if tz_limit_conf and tz_limit_conf.value.isdigit() else 0
+        # Default to 2 if missing/invalid, but allow the user to set 0 to disable
+        if tz_limit_conf and tz_limit_conf.value and tz_limit_conf.value.strip().isdigit():
+            tz_limit = int(tz_limit_conf.value.strip())
+        else:
+            tz_limit = 2
 
         tz_whitelist_records = db.query(TrailingZeroWhitelist.nid).all()
         tz_whitelist = {r[0] for r in tz_whitelist_records}

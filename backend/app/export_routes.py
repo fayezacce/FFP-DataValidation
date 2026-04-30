@@ -17,7 +17,7 @@ import logging
 from .database import get_db, SessionLocal
 from .models import (
     User, SummaryStats, ValidRecord, InvalidRecord, BackgroundTask,
-    ExportHistory, ExportTracking,
+    ExportHistory, ExportTracking, SystemConfig, TrailingZeroWhitelist,
 )
 from .auth import get_current_user
 from .rbac import PermissionChecker
@@ -468,9 +468,19 @@ async def upazila_recheck(
     if not records:
         raise HTTPException(status_code=404, detail="No records found for this upazila")
 
+    tz_limit_conf = db.query(SystemConfig).filter(SystemConfig.key == "trailing_zero_limit").first()
+    # Default to 2 if missing/invalid, but allow user to set 0 to disable
+    if tz_limit_conf and tz_limit_conf.value and tz_limit_conf.value.strip().isdigit():
+        tz_limit = int(tz_limit_conf.value.strip())
+    else:
+        tz_limit = 2
+
+    tz_whitelist_records = db.query(TrailingZeroWhitelist.nid).all()
+    tz_whitelist = {r[0] for r in tz_whitelist_records}
+
     flagged = []
     for r in records:
-        is_fake, reason = check_fake_nid(r.nid or "")
+        is_fake, reason = check_fake_nid(r.nid or "", tz_limit=tz_limit, tz_whitelist=tz_whitelist)
         if is_fake:
             row = {
                 "NID": r.nid,
