@@ -157,6 +157,24 @@ docker exec -i ffp_db pg_restore -U <POSTGRES_USER> -d ffp_validator \
 docker compose -f docker-compose.prod.yml up -d
 ```
 
+## Maintenance & Operations Scripts
+
+We provide several utility scripts in the `scripts/` directory to help maintain the platform:
+
+### 1. Zero-Downtime Production Upgrade
+Instead of manually pulling and restarting, you can use the upgrade script:
+```bash
+bash scripts/upgrade_prod.sh
+```
+This script securely pulls the latest changes from `master`, builds new containers, and restarts the stack with minimal disruption.
+
+### 2. Bulk Record Revalidation
+If you change validation rules (e.g., updating the `NID_TRAILING_ZERO_LIMIT` in the `.env` file), existing records in the `invalid_records` table might now be valid. You can run the bulk revalidation script:
+```bash
+docker exec ffp_backend python backend/app/scripts/revalidate_all.py
+```
+This script scans all invalid records, rechecks them against current configurations, and moves them to valid tables if they pass.
+
 ## API Key Note
 
 After this update, **all existing API keys will stop working** because they are now stored as SHA-256 hashes instead of plaintext. Users must regenerate their API keys via the Admin panel.
