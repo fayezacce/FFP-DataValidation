@@ -90,20 +90,18 @@ def check_fake_nid(nid: str, tz_limit: int = 0, tz_whitelist: set = None) -> tup
     if tz_whitelist and nid in tz_whitelist:
         return False, ""
 
-    # Trailing double zero (or more) for 17-digit NIDs only
+    # Trailing zero check for 17-digit NIDs only
     if len(nid) == 17:
         if tz_whitelist and nid in tz_whitelist:
-            pass # Whitelisted, so we ignore trailing zero check
-        else:
-            if tz_limit <= 0:
-                pass # Disabled
-            else:
-                limit = tz_limit
-                if nid.endswith("0" * limit):
-                    if limit == 2:
-                        return True, "Trailing double-zero NID"
-                    else:
-                        return True, f"Trailing {limit}+ zero NID"
+            pass  # Whitelisted, skip trailing zero check
+        elif tz_limit > 0:
+            # Count how many trailing zeros the NID has
+            trailing_zeros = len(nid) - len(nid.rstrip('0'))
+            if trailing_zeros >= tz_limit:
+                if tz_limit == 2:
+                    return True, "Trailing double-zero NID"
+                else:
+                    return True, f"Trailing {tz_limit}+ zero NID"
 
     # Ascending sequential run of 7+ consecutive digits (e.g. 1234567)
     for i in range(len(nid) - 6):
