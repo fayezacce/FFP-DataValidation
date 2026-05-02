@@ -141,8 +141,8 @@ run_task() {
     local cmd="$2"
     info "Running: $desc"
     docker run --rm --network ffp-datavalidation_app_network \
-      -e DATABASE_URL="postgres://${POSTGRES_USER:-ffp_admin}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-ffp_validator}" \
-      ffp-datavalidation-backend python "$cmd" \
+      -e DATABASE_URL="postgresql://${POSTGRES_USER:-ffp_admin}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-ffp_validator}" \
+      ghcr.io/fayezacce/ffp-datavalidation/backend:latest python "$cmd" \
       && info "  ✓ $desc completed" \
       || warn "  ✗ $desc failed — review logs"
 }
@@ -165,8 +165,8 @@ docker compose -f "$COMPOSE_FILE" up -d "$BACKEND_SERVICE" frontend
 sleep 10
 
 sleep 5
-HEALTH=$(curl -sf http://localhost:8000/health | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['status'])" 2>/dev/null || echo "unreachable")
-DB_STATUS=$(curl -sf http://localhost:8000/health | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['db'])" 2>/dev/null || echo "unreachable")
+HEALTH=$(docker compose -f "$COMPOSE_FILE" exec -T "$BACKEND_SERVICE" curl -sf http://localhost:8000/health | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['status'])" 2>/dev/null || echo "unreachable")
+DB_STATUS=$(docker compose -f "$COMPOSE_FILE" exec -T "$BACKEND_SERVICE" curl -sf http://localhost:8000/health | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['db'])" 2>/dev/null || echo "unreachable")
 
 echo ""
 echo "  ╔════════════════════════════════════╗"
