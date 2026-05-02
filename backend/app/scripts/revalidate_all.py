@@ -53,52 +53,57 @@ def revalidate_all():
             _, status, message = validate_nid(nid, dob_year, tz_limit, tz_whitelist)
             
             if status == "success":
-                logger.info(f"Record {inv.id} (NID: {nid}) is now VALID. Moving...")
-                
-                # Create valid record
-                valid = ValidRecord(
-                    nid=inv.nid,
-                    dob=inv.dob,
-                    name=inv.name,
-                    division=inv.division,
-                    district=inv.district,
-                    upazila=inv.upazila,
-                    division_id=inv.division_id,
-                    district_id=inv.district_id,
-                    upazila_id=inv.upazila_id,
-                    source_file=inv.source_file,
-                    upload_batch=inv.upload_batch,
-                    batch_id=inv.batch_id,
-                    card_no=inv.card_no,
-                    mobile=inv.mobile,
-                    data=inv.data,
-                    father_husband_name=inv.father_husband_name,
-                    name_bn=inv.name_bn,
-                    name_en=inv.name_en,
-                    ward=inv.ward,
-                    union_name=inv.union_name,
-                    occupation=inv.occupation,
-                    gender=inv.gender,
-                    religion=inv.religion,
-                    address=inv.address,
-                    spouse_name=inv.spouse_name,
-                    spouse_nid=inv.spouse_nid,
-                    spouse_dob=inv.spouse_dob,
-                    verification_status="unverified",
-                    created_at=inv.created_at,
-                    updated_at=datetime.now(timezone.utc)
-                )
-                
-                db.add(valid)
-                db.delete(inv)
-                moved_count += 1
+                # Check for duplicates before moving
+                existing = db.query(ValidRecord).filter(ValidRecord.nid == nid).first()
+                if existing:
+                    logger.warning(f"Record {inv.id} (NID: {nid}) is now valid but already exists in valid_records. Deleting duplicate from invalid_records.")
+                    db.delete(inv)
+                    moved_count += 1 # We count this as 'processed' to trigger commits
+                else:
+                    logger.info(f"Record {inv.id} (NID: {nid}) is now VALID. Moving...")
+                    # Create valid record
+                    valid = ValidRecord(
+                        nid=inv.nid,
+                        dob=inv.dob,
+                        name=inv.name,
+                        division=inv.division,
+                        district=inv.district,
+                        upazila=inv.upazila,
+                        division_id=inv.division_id,
+                        district_id=inv.district_id,
+                        upazila_id=inv.upazila_id,
+                        source_file=inv.source_file,
+                        upload_batch=inv.upload_batch,
+                        batch_id=inv.batch_id,
+                        card_no=inv.card_no,
+                        mobile=inv.mobile,
+                        data=inv.data,
+                        father_husband_name=inv.father_husband_name,
+                        name_bn=inv.name_bn,
+                        name_en=inv.name_en,
+                        ward=inv.ward,
+                        union_name=inv.union_name,
+                        occupation=inv.occupation,
+                        gender=inv.gender,
+                        religion=inv.religion,
+                        address=inv.address,
+                        spouse_name=inv.spouse_name,
+                        spouse_nid=inv.spouse_nid,
+                        spouse_dob=inv.spouse_dob,
+                        verification_status="unverified",
+                        created_at=inv.created_at,
+                        updated_at=datetime.now(timezone.utc)
+                    )
+                    db.add(valid)
+                    db.delete(inv)
+                    moved_count += 1
                 
                 if moved_count % 100 == 0:
                     db.commit()
                     logger.info(f"Committed {moved_count} records so far...")
         
         db.commit()
-        logger.info(f"Re-validation complete. Moved {moved_count} records to valid_records.")
+        logger.info(f"Re-validation complete. Processed {moved_count} records.")
         
     except Exception as e:
         db.rollback()
