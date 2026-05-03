@@ -5,6 +5,7 @@ import { useRouter, usePathname } from "next/navigation";
 import { isAuthenticated, getUser, clearToken } from "@/lib/auth";
 import Link from "next/link";
 import { Menu, X, LogOut, User as UserIcon } from "lucide-react";
+import LanguageToggle from "./LanguageToggle";
 
 export default function NavBar() {
   const [user, setLocalUser] = useState<any>(null);
@@ -72,6 +73,9 @@ export default function NavBar() {
               <span className="text-xs text-gray-500 mr-4">
                 Logged in as <span className="text-white font-semibold">{user.username}</span>
               </span>
+              <div className="mr-3">
+                <LanguageToggle />
+              </div>
               <button
                 onClick={handleLogout}
                 className="text-xs font-bold text-gray-400 hover:text-white transition-colors bg-[#1a1a1c] border border-[#2a2a2e] px-4 py-2 rounded-lg"
@@ -121,6 +125,9 @@ export default function NavBar() {
                     <p className="text-xs text-gray-500">Current User</p>
                     <p className="text-sm font-semibold text-white">{user.username}</p>
                   </div>
+                </div>
+                <div className="px-3 pb-4 flex justify-start">
+                  <LanguageToggle />
                 </div>
                 <button
                   onClick={handleLogout}
