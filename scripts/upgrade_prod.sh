@@ -159,6 +159,9 @@ run_task "Summary stats sync" "app/scripts/sync_all_stats.py"
 # 5d. Repair Stale Geo IDs
 run_task "Repair stale geo IDs" "app/scripts/repair_geo_ids_prod.py"
 
+# 5e. NID Re-validation (Fixes Trailing Double Zeros)
+run_task "NID Re-validation" "app/scripts/revalidate_all.py"
+
 # ── Step 6: Restart Services ───────────────────────────────────────────────
 info "--- Step 6: Restarting Services ---"
 docker compose -f "$COMPOSE_FILE" up -d "$BACKEND_SERVICE" frontend
