@@ -376,9 +376,6 @@ export default function StatisticsPage() {
                 <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight bg-gradient-to-r from-cyan-400 to-blue-400 bg-clip-text text-transparent">
                   {t("stats_title")}
                 </h1>
-                <button onClick={toggleLang} className="px-3 py-1 bg-slate-800 rounded-md text-sm border border-slate-700 hover:bg-slate-700 text-white">
-                  {lang === 'en' ? 'বাংলা' : 'English'}
-                </button>
               </div>
               <p className="text-sm text-slate-400 mt-1">{t("stats_subtitle")}</p>
             </div>

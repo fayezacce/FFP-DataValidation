@@ -408,28 +408,20 @@ export default function Home() {
       <div className="max-w-6xl mx-auto space-y-8 flex-1 w-full">
 
         {/* Header */}
-        <header className="flex flex-col sm:flex-row items-center justify-between space-y-4 sm:space-y-0 text-center sm:text-left">
-          <div className="flex-1" />
-          <div className="flex-none text-center space-y-4">
-            <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent">
-              {t("title")}
-            </h1>
-            <p className="text-lg text-slate-400 max-w-2xl mx-auto">
-              {t("subtitle")}
-            </p>
-            <Link
-              href="/statistics"
-              className="inline-flex items-center gap-2 text-sm text-cyan-400 hover:text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/20 px-4 py-2 rounded-lg transition-all"
-            >
-              <BarChart3 className="w-4 h-4" />
-              {t("view_stats")}
-            </Link>
-          </div>
-          <div className="flex-1 flex justify-end items-start pt-2">
-            <button onClick={toggleLang} className="px-3 py-1 bg-slate-800 rounded-md text-sm border border-slate-700 hover:bg-slate-700">
-              {lang === 'en' ? 'বাংলা' : 'English'}
-            </button>
-          </div>
+        <header className="text-center space-y-4">
+          <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent">
+            {t("title")}
+          </h1>
+          <p className="text-lg text-slate-400 max-w-2xl mx-auto">
+            {t("subtitle")}
+          </p>
+          <Link
+            href="/statistics"
+            className="inline-flex items-center gap-2 text-sm text-cyan-400 hover:text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/20 px-4 py-2 rounded-lg transition-all"
+          >
+            <BarChart3 className="w-4 h-4" />
+            {t("view_stats")}
+          </Link>
         </header>
 
         {/* Upload Zone */}
