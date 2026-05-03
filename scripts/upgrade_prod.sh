@@ -140,9 +140,9 @@ run_task() {
     local desc="$1"
     local cmd="$2"
     info "Running: $desc"
-    docker run --rm --network ffp-datavalidation_app_network \
+    docker compose -f "$COMPOSE_FILE" run --rm \
       -e DATABASE_URL="postgresql://${POSTGRES_USER:-ffp_admin}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-ffp_validator}" \
-      ghcr.io/fayezacce/ffp-datavalidation/backend:latest python "$cmd" \
+      "$BACKEND_SERVICE" python "$cmd" \
       && info "  ✓ $desc completed" \
       || warn "  ✗ $desc failed — review logs"
 }
