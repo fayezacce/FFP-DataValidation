@@ -76,21 +76,21 @@ export default function GeoFilterBar({ user, onChange, initialValues, className 
     if (geoInfo.divisions.length === 1 && !division) {
       setDivision(geoInfo.divisions[0]);
     }
-  }, [geoInfo.divisions]);
+  }, [geoInfo.divisions, division]);
 
   useEffect(() => {
     if (division) {
       const dists = geoInfo.districts[division] || [];
       if (dists.length === 1 && !district) setDistrict(dists[0]);
     }
-  }, [division, geoInfo]);
+  }, [division, geoInfo, district]);
 
   useEffect(() => {
     if (district) {
       const upzs = geoInfo.upazilas[district] || [];
       if (upzs.length === 1 && !upazila) setUpazila(upzs[0]);
     }
-  }, [district, geoInfo]);
+  }, [district, geoInfo, upazila]);
 
   const handleDivChange = (val: string) => {
     setDivision(val);

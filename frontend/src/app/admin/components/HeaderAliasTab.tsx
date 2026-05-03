@@ -126,7 +126,7 @@ export default function HeaderAliasTab() {
       <div className="flex justify-between items-center bg-[#121214] border border-[#1e1e20] p-6 rounded-2xl shadow-lg">
         <div>
            <h2 className="text-2xl font-black tracking-tight text-white italic uppercase">Header Variations</h2>
-           <p className="text-xs text-gray-500 font-medium">Map different Excel column spelling variations to the system's standard canonical fields.</p>
+           <p className="text-xs text-gray-500 font-medium">Map different Excel column spelling variations to the system&apos;s standard canonical fields.</p>
         </div>
         <button
           onClick={() => {

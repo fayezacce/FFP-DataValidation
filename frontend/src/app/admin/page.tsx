@@ -46,6 +46,9 @@ export default function AdminPage() {
   const [instUrl, setInstUrl] = useState("");
   const [instApiKey, setInstApiKey] = useState("");
 
+  // Geo State
+  const [upazilas, setUpazilas] = useState<any[]>([]);
+
   // Logs State
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [apiLogs, setApiLogs] = useState<any[]>([]);
@@ -233,6 +236,7 @@ export default function AdminPage() {
         if (tzLimitConf) setTrailingZeroLimit(tzLimitConf.value);
       }
       if (iRes.ok) setInstances(await iRes.json());
+      if (upzRes.ok) setUpazilas(await upzRes.json());
       if (tzRes.ok) setTzWhitelist(await tzRes.json());
 
       const [auditRes, apiRes] = await Promise.all([
@@ -625,7 +629,7 @@ export default function AdminPage() {
               {/* Scan Panel */}
               <div className="bg-[#121214] border border-[#1e1e20] p-6 rounded-2xl">
                 <h2 className="text-xl font-bold mb-2">1. Scan for Orphaned Records</h2>
-                <p className="text-xs text-gray-500 mb-4">Dry-run only. Shows records whose upazila names don't match the master geo table, and counts rows with missing geo IDs. Zero changes made.</p>
+                <p className="text-xs text-gray-500 mb-4">Dry-run only. Shows records whose upazila names don&apos;t match the master geo table, and counts rows with missing geo IDs. Zero changes made.</p>
                 <button
                   onClick={async () => {
                     setMaintenanceLoading(true);
@@ -1714,7 +1718,7 @@ export default function AdminPage() {
                     Manual Backup
                   </h2>
                   <p className="text-xs text-gray-500 mb-6 leading-relaxed">
-                    Triggers a <code>pg_dump</code> piped to <code>gzip</code> in the background. Files are stored in the server's persistent backup volume.
+                    Triggers a <code>pg_dump</code> piped to <code>gzip</code> in the background. Files are stored in the server&apos;s persistent backup volume.
                   </p>
                   <button
                     onClick={handleExportDB}

@@ -138,6 +138,7 @@ export default function Home() {
       };
       fetchGuess();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -310,6 +311,7 @@ export default function Home() {
     if (file && dobColumn && nidColumn && !results) {
       runPreview();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file, dobColumn, nidColumn, headerRow, selectedSheet]);
 
     const runValidation = async () => {
@@ -470,7 +472,7 @@ export default function Home() {
                             <li>Check if you selected the correct <strong className="text-slate-200">Date of Birth</strong> and <strong className="text-slate-200">NID</strong> columns.</li>
                             <li>Ensure your column names match the data (Double check the <strong className="text-slate-200">Header Row</strong> setting).</li>
                             <li>Make sure there are no <strong className="text-slate-200">Merged Cells</strong> in your Excel data rows.</li>
-                            <li>Save your file as <strong className="text-slate-200">.xlsx</strong> if it's currently an older format.</li>
+                            <li>Save your file as <strong className="text-slate-200">.xlsx</strong> if it&apos;s currently an older format.</li>
                           </ul>
                         </div>
                       </div>
@@ -560,7 +562,7 @@ export default function Home() {
                   <MapPin className="w-5 h-5 text-cyan-400" />
                   <h3 className="text-lg font-medium text-slate-200">Manual Location Selection (Optional)</h3>
                 </div>
-                <p className="text-xs text-slate-400">If you don't select these, we'll try to detect them from the filename.</p>
+                <p className="text-xs text-slate-400">If you don&apos;t select these, we&apos;ll try to detect them from the filename.</p>
                 <div className="grid md:grid-cols-3 gap-4">
                   <div className="space-y-2">
                     <label className="text-xs font-medium text-slate-400 uppercase">Division</label>
@@ -632,7 +634,7 @@ export default function Home() {
                 />
                 <div>
                   <span className="text-orange-300 font-bold block">Wipe Upazila Before Upload</span>
-                  <p className="text-xs text-slate-400 font-normal mt-0.5">Clears ALL existing records for this upazila first, then inserts the new batch. Ensures the statistics page exactly matches this upload's results. Use for re-uploads.</p>
+                  <p className="text-xs text-slate-400 font-normal mt-0.5">Clears ALL existing records for this upazila first, then inserts the new batch. Ensures the statistics page exactly matches this upload&apos;s results. Use for re-uploads.</p>
                 </div>
               </div>
 

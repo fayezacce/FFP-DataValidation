@@ -42,7 +42,7 @@ const MaintenanceTab: React.FC<MaintenanceTabProps> = ({
         {/* Scan Panel */}
         <div className="bg-[#121214] border border-[#1e1e20] p-6 rounded-2xl">
           <h2 className="text-xl font-bold mb-2">1. Scan for Orphaned Records</h2>
-          <p className="text-xs text-gray-500 mb-4">Dry-run only. Shows records whose upazila names don't match the master geo table, and counts rows with missing geo IDs. Zero changes made.</p>
+          <p className="text-xs text-gray-500 mb-4">Dry-run only. Shows records whose upazila names don&apos;t match the master geo table, and counts rows with missing geo IDs. Zero changes made.</p>
           <button
             onClick={onScanOrphans}
             disabled={maintenanceLoading}
