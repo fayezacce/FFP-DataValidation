@@ -55,17 +55,17 @@ def repair_geo_ids():
         recalc_sql = text("""
             WITH counts AS (
                 SELECT 
-                    district, upazila,
+                    norm_district, norm_upazila,
                     SUM(valid_cnt) as live_valid,
                     SUM(invalid_cnt) as live_invalid
                 FROM (
-                    SELECT district, upazila, COUNT(*) as valid_cnt, 0 as invalid_cnt 
-                    FROM valid_records GROUP BY district, upazila
+                    SELECT LOWER(TRIM(district)) as norm_district, LOWER(TRIM(upazila)) as norm_upazila, COUNT(*) as valid_cnt, 0 as invalid_cnt 
+                    FROM valid_records GROUP BY norm_district, norm_upazila
                     UNION ALL
-                    SELECT district, upazila, 0 as valid_cnt, COUNT(*) as invalid_cnt 
-                    FROM invalid_records GROUP BY district, upazila
+                    SELECT LOWER(TRIM(district)) as norm_district, LOWER(TRIM(upazila)) as norm_upazila, 0 as valid_cnt, COUNT(*) as invalid_cnt 
+                    FROM invalid_records GROUP BY norm_district, norm_upazila
                 ) combined
-                GROUP BY district, upazila
+                GROUP BY norm_district, norm_upazila
             )
             UPDATE summary_stats s
             SET valid = COALESCE(c.live_valid, 0),
@@ -73,8 +73,8 @@ def repair_geo_ids():
                 total = COALESCE(c.live_valid, 0) + COALESCE(c.live_invalid, 0),
                 updated_at = NOW()
             FROM counts c
-            WHERE LOWER(TRIM(s.district)) = LOWER(TRIM(c.district))
-              AND LOWER(TRIM(s.upazila))  = LOWER(TRIM(c.upazila))
+            WHERE LOWER(TRIM(s.district)) = c.norm_district
+              AND LOWER(TRIM(s.upazila))  = c.norm_upazila
         """)
         stats_result = db.execute(recalc_sql)
         print(f"  ✓ {stats_result.rowcount} SummaryStats entries refreshed.")
