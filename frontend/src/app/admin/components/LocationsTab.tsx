@@ -24,6 +24,7 @@ export default function LocationsTab() {
   const [newName, setNewName] = useState("");
   const [newAlias, setNewAlias] = useState("");
   const [childName, setChildName] = useState("");
+  const [quota, setQuota] = useState<number>(0);
   const [actionLoading, setActionLoading] = useState(false);
 
   const fetchTree = async () => {
@@ -59,6 +60,7 @@ export default function LocationsTab() {
     setNewName(node.name);
     setNewAlias("");
     setChildName("");
+    setQuota(node.quota || 0);
   };
 
   const closeManager = () => setManagerNode(null);
@@ -154,11 +156,12 @@ export default function LocationsTab() {
           division_name: (managerNode as any).division_name || managerNode.name, 
           district_name: managerNode.name,
           name: childName,
-          quota: 0
+          quota: quota || 0
         }),
       });
       if (res.ok) {
         setChildName("");
+        setQuota(0);
         await fetchTree();
         const updatedTree = await (await fetchWithAuth(getBackendUrl() + "/admin/geo/tree")).json();
         setTree(updatedTree);
@@ -173,6 +176,28 @@ export default function LocationsTab() {
         };
         const fresh = findNode(updatedTree);
         if (fresh) setManagerNode(fresh);
+      }
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleUpdateQuota = async () => {
+    if (!managerNode || managerNode.type !== 'upazila') return;
+    setActionLoading(true);
+    try {
+      const res = await fetchWithAuth(getBackendUrl() + `/admin/upazilas/${managerNode.id}/quota`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ quota })
+      });
+      if (res.ok) {
+        setManagerNode({ ...managerNode, quota });
+        await fetchTree();
+        alert("Quota updated successfully");
+      } else {
+        const d = await res.json();
+        alert(d.detail || "Quota update failed");
       }
     } finally {
       setActionLoading(false);
@@ -207,15 +232,20 @@ export default function LocationsTab() {
           >
             <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
           </button>
-          <div className="flex-1 flex items-center space-x-3">
-             <span className={`px-2.5 py-1 rounded text-[10px] font-black uppercase tracking-widest border ${colors[node.type]}`}>{node.type}</span>
-             <span className="text-sm font-bold text-gray-100">{node.name}</span>
-             <div className="flex flex-wrap gap-1">
-                {node.aliases.map(a => (
-                  <span key={a.id} className="px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-[10px] text-gray-400">{a.alias_name}</span>
-                ))}
-             </div>
-          </div>
+              <div className="flex-1 flex items-center space-x-3">
+                 <span className={`px-2.5 py-1 rounded text-[10px] font-black uppercase tracking-widest border ${colors[node.type]}`}>{node.type}</span>
+                 <span className="text-sm font-bold text-gray-100">{node.name}</span>
+                 {node.type === 'upazila' && (
+                    <span className="text-[10px] font-black text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                      QUOTA: {node.quota?.toLocaleString('en-IN')}
+                    </span>
+                 )}
+                 <div className="flex flex-wrap gap-1">
+                    {node.aliases.map(a => (
+                      <span key={a.id} className="px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-[10px] text-gray-400">{a.alias_name}</span>
+                    ))}
+                 </div>
+              </div>
           <div className="opacity-0 group-hover:opacity-100 transition-opacity">
              <span className="text-[10px] font-bold text-gray-600 bg-white/5 px-2 py-1 rounded uppercase tracking-tighter">Edit</span>
           </div>
@@ -299,6 +329,29 @@ export default function LocationsTab() {
                        </button>
                     </div>
                   </section>
+
+                  {/* QUOTA SECTION (UPAZILA ONLY) */}
+                  {managerNode.type === 'upazila' && (
+                    <section>
+                      <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-4 block">Distribution Quota</label>
+                      <div className="flex space-x-2">
+                        <input 
+                          type="number" 
+                          value={quota} 
+                          onChange={e => setQuota(parseInt(e.target.value) || 0)} 
+                          className="flex-1 bg-black border border-white/10 rounded-2xl px-5 py-3 text-sm focus:border-indigo-500 outline-none transition-all" 
+                        />
+                        <button 
+                          onClick={handleUpdateQuota} 
+                          disabled={actionLoading || quota === managerNode.quota} 
+                          className="px-6 py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs uppercase tracking-widest transition-all disabled:opacity-30 shadow-lg shadow-indigo-600/20"
+                        >
+                          Update Quota
+                        </button>
+                      </div>
+                      <p className="text-[10px] text-gray-600 mt-4 italic">Quota is used to calculate "Remaining" and "Completion %" in statistics.</p>
+                    </section>
+                  )}
                 </div>
 
                 <div className="space-y-10">
