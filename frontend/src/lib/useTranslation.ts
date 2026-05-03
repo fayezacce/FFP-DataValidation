@@ -135,23 +135,42 @@ const listeners = new Set<(lang: Lang) => void>();
 export const useTranslation = () => {
   const [lang, setLang] = useState<Lang>(globalLang);
 
-  useEffect(() => {
-    // Client-side init
+  const syncLang = () => {
     if (typeof window !== 'undefined') {
-      const stored = localStorage.getItem('ffp_lang') as Lang;
+      const stored = localStorage.getItem('ffp_lang')?.toLowerCase() as Lang;
       if (stored && (stored === 'en' || stored === 'bn')) {
-        globalLang = stored;
-        setLang(stored);
+        if (globalLang !== stored) {
+          globalLang = stored;
+          setLang(stored);
+        }
       }
     }
+  };
+
+  useEffect(() => {
+    syncLang();
+    
+    // Listen for global event
+    const handleGlobalChange = () => {
+      syncLang();
+    };
+
+    window.addEventListener('languageChange', handleGlobalChange);
     listeners.add(setLang);
-    return () => { listeners.delete(setLang); };
+
+    return () => {
+      window.removeEventListener('languageChange', handleGlobalChange);
+      listeners.delete(setLang);
+    };
   }, []);
 
   const toggleLang = () => {
     const next: Lang = lang === 'en' ? 'bn' : 'en';
     globalLang = next;
-    if (typeof window !== 'undefined') localStorage.setItem('ffp_lang', next);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('ffp_lang', next);
+      window.dispatchEvent(new Event('languageChange'));
+    }
     listeners.forEach(l => l(next));
   };
 
