@@ -43,9 +43,13 @@ def revalidate_all():
         logger.info(f"Found {len(invalid_recs)} invalid records to check")
         
         moved_count = 0
+        seen_nids = set()
         
         for inv in invalid_recs:
             nid = str(inv.nid or "").strip()
+            if not nid:
+                continue
+                
             dob = str(inv.dob or "").strip()
             dob_year = dob[:4] if len(dob) >= 4 and dob[:4].isdigit() else None
             
@@ -54,11 +58,11 @@ def revalidate_all():
             
             if status == "success":
                 # Check for duplicates before moving
-                existing = db.query(ValidRecord).filter(ValidRecord.nid == nid).first()
-                if existing:
-                    logger.warning(f"Record {inv.id} (NID: {nid}) is now valid but already exists in valid_records. Deleting duplicate from invalid_records.")
+                existing_in_db = db.query(ValidRecord).filter(ValidRecord.nid == nid).first()
+                if existing_in_db or nid in seen_nids:
+                    logger.warning(f"Record {inv.id} (NID: {nid}) is now valid but already exists in valid_records or current batch. Deleting duplicate from invalid_records.")
                     db.delete(inv)
-                    moved_count += 1 # We count this as 'processed' to trigger commits
+                    moved_count += 1
                 else:
                     logger.info(f"Record {inv.id} (NID: {nid}) is now VALID. Moving...")
                     # Create valid record
@@ -96,6 +100,7 @@ def revalidate_all():
                     )
                     db.add(valid)
                     db.delete(inv)
+                    seen_nids.add(nid)
                     moved_count += 1
                 
                 if moved_count % 100 == 0:
