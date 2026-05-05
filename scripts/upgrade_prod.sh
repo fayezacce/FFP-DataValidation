@@ -76,12 +76,26 @@ if [[ -n "$RESTORE_FILE" ]]; then
     docker compose -f "$COMPOSE_FILE" exec -T "$DB_SERVICE" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
         -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public; GRANT ALL ON SCHEMA public TO public;"
     
-    info "Running restore (this may take a while for large files)..."
+    TEMP_RESTORE_FILE="/tmp/restore_${TIMESTAMP}.sql"
+    
     if [[ "$RESTORE_FILE" == *.gz ]]; then
-        gunzip -c "$RESTORE_FILE" | docker compose -f "$COMPOSE_FILE" exec -T "$DB_SERVICE" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+        info "Uncompressing $RESTORE_FILE to host temp file..."
+        gunzip -c "$RESTORE_FILE" > "$TEMP_RESTORE_FILE"
     else
-        cat "$RESTORE_FILE" | docker compose -f "$COMPOSE_FILE" exec -T "$DB_SERVICE" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+        cp "$RESTORE_FILE" "$TEMP_RESTORE_FILE"
     fi
+
+    info "Copying backup to container..."
+    DB_CONTAINER=$(docker compose -f "$COMPOSE_FILE" ps -q "$DB_SERVICE")
+    docker cp "$TEMP_RESTORE_FILE" "${DB_CONTAINER}:/tmp/restore.sql"
+    
+    info "Running restore locally inside container (memory-efficient)..."
+    docker compose -f "$COMPOSE_FILE" exec -T "$DB_SERVICE" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f /tmp/restore.sql
+    
+    info "Cleaning up temp files..."
+    rm -f "$TEMP_RESTORE_FILE"
+    docker compose -f "$COMPOSE_FILE" exec -T "$DB_SERVICE" rm -f /tmp/restore.sql
+    
     info "Restore complete."
 fi
 
@@ -92,7 +106,7 @@ mkdir -p "$BACKUP_DIR"
 SNAPSHOT_FILE="${BACKUP_DIR}/pre_upgrade_${TIMESTAMP}.tar.gz"
 
 docker compose -f "$COMPOSE_FILE" exec -T "$DB_SERVICE" \
-  pg_dump -U "${POSTGRES_USER:-ffp_admin}" \
+  pg_dump -U "${POSTGRES_USER:-fayez}" \
           -d "${POSTGRES_DB:-ffp_validator}" \
           -F tar \
   | gzip > "$SNAPSHOT_FILE" \
@@ -141,7 +155,7 @@ run_task() {
     local cmd="$2"
     info "Running: $desc"
     docker compose -f "$COMPOSE_FILE" run --rm \
-      -e DATABASE_URL="postgresql://${POSTGRES_USER:-ffp_admin}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-ffp_validator}" \
+      -e DATABASE_URL="postgresql://${POSTGRES_USER:-fayez}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-ffp_validator}" \
       "$BACKEND_SERVICE" python "$cmd" \
       && info "  ✓ $desc completed" \
       || warn "  ✗ $desc failed — review logs"
