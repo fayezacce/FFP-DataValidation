@@ -85,6 +85,8 @@ pgbouncer/userlist.txt
 
 # ── AI Agent Config (local workspace only) ──────
 .agent/
+GEMINI.md
+scratch/
 
 # ── OS / Editor ──────────────────────────────────
 .DS_Store
