@@ -499,9 +499,9 @@ def _backfill_canonical_columns(db: Session, task_id: str = None):
             if _is_cancelled():
                 return
             result = db.execute(text(UPDATE_SQL.format(table="valid_records")), {"last_id": last_id, "lim": CHUNK})
+            ids = result.fetchall()
             db.commit()
             _time.sleep(0.1) # Breather for IO
-            ids = result.fetchall()
             if not ids:
                 break
             last_id = max(r[0] for r in ids)
@@ -515,9 +515,9 @@ def _backfill_canonical_columns(db: Session, task_id: str = None):
             if _is_cancelled():
                 return
             result = db.execute(text(UPDATE_SQL.format(table="invalid_records")), {"last_id": last_id, "lim": CHUNK})
+            ids = result.fetchall()
             db.commit()
             _time.sleep(0.1) # Breather for IO
-            ids = result.fetchall()
             if not ids:
                 break
             last_id = max(r[0] for r in ids)
