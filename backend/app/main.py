@@ -460,7 +460,7 @@ def _backfill_canonical_columns(db: Session, task_id: str = None):
         except Exception:
             return False
 
-    CHUNK = 20_000
+    CHUNK = 5_000
     UPDATE_SQL = """
         UPDATE {table} SET
             occupation  = COALESCE(occupation,  NULLIF(TRIM(data->>'occupation'),  '')),
@@ -500,6 +500,7 @@ def _backfill_canonical_columns(db: Session, task_id: str = None):
                 return
             result = db.execute(text(UPDATE_SQL.format(table="valid_records")), {"last_id": last_id, "lim": CHUNK})
             db.commit()
+            _time.sleep(0.1) # Breather for IO
             ids = result.fetchall()
             if not ids:
                 break
@@ -515,6 +516,7 @@ def _backfill_canonical_columns(db: Session, task_id: str = None):
                 return
             result = db.execute(text(UPDATE_SQL.format(table="invalid_records")), {"last_id": last_id, "lim": CHUNK})
             db.commit()
+            _time.sleep(0.1) # Breather for IO
             ids = result.fetchall()
             if not ids:
                 break
