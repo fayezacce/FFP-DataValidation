@@ -787,6 +787,34 @@ def _extract_json_fields(df: pd.DataFrame, json_fields: list):
     return df
 
 
+def _count_bangla_chars(value: str) -> int:
+    if not isinstance(value, str):
+        return 0
+    return sum(1 for ch in value if "\u0980" <= ch <= "\u09FF")
+
+
+def _fix_mojibake_text(value):
+    if not isinstance(value, str):
+        return value
+    if _count_bangla_chars(value) > 0:
+        return value
+    if not re.search(r"[àÂÃ]", value):
+        return value
+
+    candidates = [value]
+    for codec in ("cp1252", "latin1"):
+        try:
+            decoded = value.encode(codec, errors="replace").decode("utf-8", errors="replace")
+            candidates.append(decoded)
+        except Exception:
+            continue
+
+    def score(text: str) -> tuple[int, int]:
+        return (_count_bangla_chars(text), -text.count("�"))
+
+    return max(candidates, key=score)
+
+
 def _prepare_export_df(df: pd.DataFrame, columns: list = None) -> pd.DataFrame:
     if columns is None:
         columns = _DEFAULT_VALID_EXPORT_COLUMNS.copy()
@@ -813,7 +841,10 @@ def _prepare_export_df(df: pd.DataFrame, columns: list = None) -> pd.DataFrame:
             value = df[col]
             if isinstance(value, pd.DataFrame):
                 value = value.iloc[:, 0]
-            output[col] = value
+            if isinstance(value, pd.Series) and value.dtype == object:
+                output[col] = value.apply(_fix_mojibake_text)
+            else:
+                output[col] = _fix_mojibake_text(value)
         else:
             output[col] = ""
 
