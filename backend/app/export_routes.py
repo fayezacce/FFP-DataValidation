@@ -796,9 +796,7 @@ def _count_bangla_chars(value: str) -> int:
 def _fix_mojibake_text(value):
     if not isinstance(value, str):
         return value
-    if _count_bangla_chars(value) > 0:
-        return value
-    if not re.search(r"[àÂÃ]", value):
+    if "�" not in value and not re.search(r"[àÂÃ]", value):
         return value
 
     candidates = [value]

@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
 import "./globals.css";
 import NavBar from "@/components/NavBar";
 import TaskTray from "@/components/TaskTray";
@@ -11,8 +10,6 @@ export const metadata: Metadata = {
   authors: [{ name: "Fayez Ahmed" }],
 };
 
-const inter = Inter({ subsets: ["latin"] });
-
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -20,7 +17,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${inter.className} bg-[#0a0a0b]`}>
+      <body className="bg-[#0a0a0b]">
         <Toaster position="top-right" />
         <NavBar />
         <main>

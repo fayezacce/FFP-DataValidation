@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  backend:
+    ports:
+      - "8000:8000"
+    environment:
+      - WATCHFILES_FORCE_POLLING=true
+    # keep volumes from base file; command already contains --reload
+
+  frontend:
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+    # keep volumes from base file; command already runs next dev

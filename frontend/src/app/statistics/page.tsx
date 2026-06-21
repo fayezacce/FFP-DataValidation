@@ -26,6 +26,48 @@ export default function StatisticsPage() {
   const [isMounted, setIsMounted] = useState(false);
   const { lang, toggleLang, t } = useTranslation();
 
+  const EXPORT_COLUMN_OPTIONS = [
+    { value: "card_no", label: t("card_no") },
+    { value: "serial_no", label: "Serial No" },
+    { value: "name_bn", label: t("beneficiary_name_bn") },
+    { value: "name_en", label: t("beneficiary_name_en") },
+    { value: "father_husband_name", label: t("father_name") },
+    { value: "dob", label: t("dob_nid") },
+    { value: "nid_number", label: t("nid_number") },
+    { value: "mobile", label: t("mobile_no") },
+    { value: "gender", label: t("gender") },
+    { value: "religion", label: t("religion") },
+    { value: "occupation", label: t("occupation") },
+    { value: "spouse_name", label: t("spouse_name") },
+    { value: "spouse_nid", label: t("spouse_nid") },
+    { value: "spouse_dob", label: t("spouse_dob") },
+    { value: "address", label: t("village_name") },
+    { value: "ward", label: t("ward_no") },
+    { value: "union_name", label: t("union_name") },
+    { value: "dealer_name", label: t("dealer_name") },
+    { value: "dealer_nid", label: t("dealer_nid") },
+    { value: "dealer_mobile", label: t("dealer_mobile") },
+    { value: "beneficiary_type", label: "Beneficiary Type" },
+    { value: "division", label: "Division" },
+    { value: "district", label: "District" },
+    { value: "upazila", label: "Upazila" },
+  ];
+
+  const [exportColumnsOpen, setExportColumnsOpen] = useState(false);
+  const [selectedExportColumns, setSelectedExportColumns] = useState<string[]>([
+    "card_no",
+    "name_bn",
+    "name_en",
+    "father_husband_name",
+    "dob",
+    "nid_number",
+    "division",
+    "district",
+    "upazila",
+  ]);
+  const [customExportMode, setCustomExportMode] = useState<"checked" | "valid" | "invalid">("checked");
+  const [customExportLoading, setCustomExportLoading] = useState(false);
+
   useEffect(() => {
     setIsMounted(true);
     setUser(JSON.parse(localStorage.getItem("ffp_user") || "null"));
@@ -179,6 +221,45 @@ export default function StatisticsPage() {
         alert('Failed: ' + (err.detail || 'Unknown error'));
       }
     } catch (e) { console.error(e); }
+  };
+
+  const handleDownloadSelectedWithColumns = async () => {
+    if (selectionCount === 0) {
+      alert("Select at least one location to export with custom columns.");
+      return;
+    }
+
+    if (selectedExportColumns.length === 0) {
+      alert("Please select at least one column for export.");
+      return;
+    }
+
+    setCustomExportLoading(true);
+    try {
+      const divisions = Array.from(selectedDivisions);
+      const districts = Array.from(selectedDistricts).map(k => k.split('|')[1]);
+      const res = await fetchWithAuth('/api/export/zip-selected', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: customExportMode,
+          divisions,
+          districts,
+          columns: selectedExportColumns,
+        }),
+      });
+      if (res.ok) {
+        alert(`Custom ${customExportMode} export started! Check the Task Tray.`);
+      } else {
+        const err = await res.json().catch(() => ({ detail: 'Unknown error' }));
+        alert('Failed: ' + (err.detail || 'Unknown error'));
+      }
+    } catch (e) {
+      console.error(e);
+      alert("Custom export failed.");
+    } finally {
+      setCustomExportLoading(false);
+    }
   };
 
   const buildLiveExportInvalidUrl = (entry: StatsEntry, fmt: string) => {
@@ -453,6 +534,69 @@ export default function StatisticsPage() {
                     ✕ Clear Selection
                   </button>
                 </div>
+              </div>
+            )}
+
+            {selectionCount > 0 && (
+              <div className="relative group z-50">
+                <button onClick={() => setExportColumnsOpen(prev => !prev)} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-800/50 border border-slate-700/50 text-slate-300 text-sm hover:bg-slate-700 transition-all">
+                  <Download className="w-4 h-4" /> Custom Selected Export
+                </button>
+                {exportColumnsOpen && (
+                  <div className="absolute right-0 mt-2 w-[420px] bg-[#1e2025] border border-[#2d2f34] shadow-2xl rounded-lg overflow-hidden">
+                    <div className="p-4 text-sm text-slate-200 space-y-4">
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <div className="font-semibold text-slate-100">Custom export columns</div>
+                          <div className="text-slate-500 text-xs">Choose columns and export selected locations.</div>
+                        </div>
+                        <button onClick={() => setExportColumnsOpen(false)} className="text-slate-400 hover:text-slate-100">Close</button>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 max-h-72 overflow-y-auto">
+                        {EXPORT_COLUMN_OPTIONS.map(option => (
+                          <label key={option.value} className="flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-slate-200 cursor-pointer hover:border-indigo-500">
+                            <input
+                              type="checkbox"
+                              checked={selectedExportColumns.includes(option.value)}
+                              onChange={() => {
+                                setSelectedExportColumns(prev =>
+                                  prev.includes(option.value)
+                                    ? prev.filter(value => value !== option.value)
+                                    : [...prev, option.value]
+                                );
+                              }}
+                              className="accent-cyan-400"
+                            />
+                            <span className="text-xs leading-tight">{option.label}</span>
+                          </label>
+                        ))}
+                      </div>
+
+                      <div className="flex flex-col gap-2">
+                        <div className="flex items-center gap-2 text-xs text-slate-400">
+                          <span>Export mode:</span>
+                          {(['checked', 'valid', 'invalid'] as const).map(mode => (
+                            <button
+                              key={mode}
+                              onClick={() => setCustomExportMode(mode)}
+                              className={`px-2 py-1 rounded-md text-slate-200 ${customExportMode === mode ? 'bg-cyan-600' : 'bg-slate-800/60 hover:bg-slate-700'}`}
+                            >
+                              {mode === 'checked' ? 'Checked' : mode === 'valid' ? 'Valid' : 'Invalid'}
+                            </button>
+                          ))}
+                        </div>
+                        <button
+                          onClick={handleDownloadSelectedWithColumns}
+                          disabled={customExportLoading || selectedExportColumns.length === 0}
+                          className="w-full rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-cyan-500 disabled:cursor-not-allowed disabled:bg-slate-700"
+                        >
+                          {customExportLoading ? 'Starting export…' : 'Start custom selected export'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
