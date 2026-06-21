@@ -133,6 +133,9 @@ def get_live_records_df(
         if "data" in df.columns:
             df = df.drop(columns=["data"])
 
+    if df.columns.duplicated().any():
+        df = df.loc[:, ~df.columns.duplicated()]
+
     if "Excel_Row" not in df.columns:
         df["Excel_Row"] = ""
 
@@ -807,7 +810,10 @@ def _prepare_export_df(df: pd.DataFrame, columns: list = None) -> pd.DataFrame:
                 output[col] = ids.apply(lambda v: re.sub(r"\D", "", v) if len(re.sub(r"\D", "", v)) == 10 else "")
             continue
         if col in df.columns:
-            output[col] = df[col]
+            value = df[col]
+            if isinstance(value, pd.DataFrame):
+                value = value.iloc[:, 0]
+            output[col] = value
         else:
             output[col] = ""
 
