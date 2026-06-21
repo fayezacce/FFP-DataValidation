@@ -2,6 +2,7 @@
 FFP Data Validator — Export Routes
 Handles live exports, ZIP generation, downloads, recheck, and trailing-zeros reports.
 """
+from collections import defaultdict
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
@@ -9,6 +10,7 @@ from sqlalchemy import text
 from datetime import datetime, timezone
 import pandas as pd
 import os
+import re
 import uuid
 import urllib.parse
 import zipfile
@@ -44,6 +46,7 @@ def get_live_records_df(
     upazila_ids: list = None,
     districts: list = None,
     divisions: list = None,
+    keep_data: bool = False,
 ):
     """Fetch live records and return a formatted DataFrame. Optimized for national scale."""
     table_name = "invalid_records" if is_invalid else "valid_records"
@@ -56,6 +59,10 @@ def get_live_records_df(
             name as "Name", division as "Division", district as "District",
             upazila as "Upazila", batch_id as "Batch_ID", source_file as "Source_File",
             mobile as "Mobile", card_no as "Card_No",
+            union_name as "Union_Name", name_bn as "Name_BN", name_en as "Name_EN",
+            father_husband_name as "Father_Husband_Name", occupation as "Occupation",
+            address as "Address", ward as "Ward", gender as "Gender", religion as "Religion",
+            spouse_name as "Spouse_Name", spouse_nid as "Spouse_NID", spouse_dob as "Spouse_DOB",
             data,
             {"'error' as \"Status\", error_message as \"Message\"" if is_invalid else "'valid' as \"Status\", '' as \"Message\""}
         FROM {table_name}
@@ -102,7 +109,7 @@ def get_live_records_df(
         try:
             sample_data = df.iloc[0]["data"]
             if isinstance(sample_data, dict):
-                # If we need and extra fields beyond our native ones, we'll expand.
+                # If we need an extra fields beyond our native ones, we'll expand.
                 # Standard CSV headers we care about often are in data.
                 # At nationwide scale, we should actually avoid this unless it's a small set.
                 if len(df) < 50000:
@@ -114,6 +121,9 @@ def get_live_records_df(
                         df = pd.concat([df, data_df[cols_to_add]], axis=1)
                     if "Excel_Row" in data_df.columns:
                         df["Excel_Row"] = data_df["Excel_Row"]
+                elif keep_data:
+                    # Preserve the JSON payload for export paths that need it
+                    pass
                 else:
                     # Large dataset: Just drop data to save RAM
                     df = df.drop(columns=["data"])
@@ -654,8 +664,163 @@ def _export_cols(df: pd.DataFrame) -> pd.DataFrame:
     return df[keep].copy() if keep else df
 
 
-def _safe_name(s: str) -> str:
-    return str(s or "Unknown").replace(" ", "_").replace("/", "_")
+_EXPORT_FIELD_KEY_MAP = {
+    "division_name": "division",
+    "district_name": "district",
+    "upazila_name": "upazila",
+    "national_id": "nid",
+    "nid_number": "nid",
+    "nid_17": "nid_17",
+    "nid_10": "nid_10",
+    "card_no": "card_no",
+    "serial_no": "serial_no",
+    "name_bn": "name_bn",
+    "name_en": "name_en",
+    "father_husband_name": "father_husband_name",
+    "dob": "dob",
+    "occupation": "occupation",
+    "address": "address",
+    "ward": "ward",
+    "union_name": "union_name",
+    "mobile": "mobile",
+    "gender": "gender",
+    "religion": "religion",
+    "spouse_name": "spouse_name",
+    "spouse_nid": "spouse_nid",
+    "spouse_dob": "spouse_dob",
+}
+
+_EXPORT_COLUMN_LABELS = {
+    "division": "বিভাগের নাম",
+    "district": "জেলার নাম",
+    "upazila": "উপজেলার নাম",
+    "union_name": "ইউনিয়নের নাম",
+    "serial_no": "ক্রমিক নং",
+    "card_no": "কার্ড নম্বর",
+    "name_bn": "উপকারভোগীর নাম (বাংলা)",
+    "name_en": "উপকারভোগীর নাম (ইংরেজিতে)",
+    "father_husband_name": "পিতার নাম",
+    "dob": "জন্ম তারিখ",
+    "occupation": "পেশা",
+    "address": "গ্রামের নাম",
+    "ward": "ওয়ার্ড নং",
+    "nid": "জাতীয় পরিচয়পত্র নম্বর",
+    "nid_17": "জাতীয় পরিচয়পত্র নম্বর-১৭ ডিজিট",
+    "nid_10": "জাতীয় পরিচয়পত্র নম্বর-10 ডিজিট",
+    "mobile": "মোবাইল নম্বর",
+    "gender": "লিঙ্গ",
+    "religion": "ধর্ম",
+    "spouse_name": "স্বামী/স্ত্রীর নাম",
+    "spouse_nid": "স্বামী/ স্ত্রীর জাতীয় পরিচয়পত্র নম্বর",
+    "spouse_dob": "স্বামী/স্ত্রীর জন্ম তারিখ",
+}
+
+_EXPORT_JSON_FIELDS = {"serial_no"}
+
+_DEFAULT_VALID_EXPORT_COLUMNS = [
+    "division", "district", "upazila", "union_name", "serial_no",
+    "name_bn", "name_en", "father_husband_name", "dob", "occupation",
+    "address", "ward", "nid_17", "nid_10", "mobile", "gender",
+    "religion", "spouse_name", "spouse_nid", "spouse_dob",
+]
+
+
+def _safe_filename(name: str) -> str:
+    name = str(name or "").strip()
+    name = re.sub(r"[\\/:*?\"<>|]+", "_", name)
+    name = re.sub(r"\s+", "_", name)
+    return name or "export"
+
+
+def _normalize_export_columns(requested_columns: list) -> list:
+    if not requested_columns:
+        return _DEFAULT_VALID_EXPORT_COLUMNS.copy()
+    normalized = []
+    for col in requested_columns:
+        if not isinstance(col, str):
+            continue
+        key = col.strip().lower()
+        key = _EXPORT_FIELD_KEY_MAP.get(key, key)
+        if key not in _EXPORT_COLUMN_LABELS and key not in {"nid_10", "nid_17"}:
+            raise ValueError(f"Unsupported export column: {col}")
+        normalized.append(key)
+    return normalized
+
+
+def _format_export_filename(template: str, unit_data: dict) -> str:
+    if not template:
+        template = "{district}_{upazila}_Approved_NID_NotVerified_FFP_List.xlsx"
+    if not template.lower().endswith(".xlsx"):
+        template = template + ".xlsx"
+    safe_vars = {
+        "division": _safe_filename(unit_data.get("division")),
+        "district": _safe_filename(unit_data.get("district")),
+        "upazila": _safe_filename(unit_data.get("upazila")),
+        "division_name": _safe_filename(unit_data.get("division")),
+        "district_name": _safe_filename(unit_data.get("district")),
+        "upazila_name": _safe_filename(unit_data.get("upazila")),
+    }
+    has_geo_placeholder = any(tok in template for tok in ["{division}", "{district}", "{upazila}", "{division_name}", "{district_name}", "{upazila_name}"])
+    try:
+        filename = template.format_map(defaultdict(str, safe_vars))
+    except Exception:
+        filename = template
+    if not has_geo_placeholder:
+        safe_base = _safe_filename(f"{unit_data.get('district','')}_{unit_data.get('upazila','')}")
+        filename = filename.replace(".xlsx", f"_{safe_base}.xlsx")
+    return _safe_filename(filename)
+
+
+def _extract_json_fields(df: pd.DataFrame, json_fields: list):
+    if "data" not in df.columns or df["data"].isnull().all():
+        return df
+    try:
+        json_df = pd.DataFrame(df["data"].tolist())
+        for field in json_fields:
+            if field in json_df.columns and field not in df.columns:
+                df[field] = json_df[field]
+    except Exception:
+        pass
+    return df
+
+
+def _prepare_export_df(df: pd.DataFrame, columns: list = None) -> pd.DataFrame:
+    if columns is None:
+        columns = _DEFAULT_VALID_EXPORT_COLUMNS.copy()
+    df = df.copy()
+    required_json = [c for c in columns if c in _EXPORT_JSON_FIELDS]
+    if required_json and "data" in df.columns:
+        df = _extract_json_fields(df, required_json)
+
+    output = {}
+    for col in columns:
+        if col == "nid_17":
+            output[col] = ""
+            if "nid" in df.columns:
+                ids = df["nid"].astype(str).fillna("")
+                output[col] = ids.apply(lambda v: re.sub(r"\D", "", v) if len(re.sub(r"\D", "", v)) == 17 else "")
+            continue
+        if col == "nid_10":
+            output[col] = ""
+            if "nid" in df.columns:
+                ids = df["nid"].astype(str).fillna("")
+                output[col] = ids.apply(lambda v: re.sub(r"\D", "", v) if len(re.sub(r"\D", "", v)) == 10 else "")
+            continue
+        if col in df.columns:
+            output[col] = df[col]
+        else:
+            output[col] = ""
+
+    result = pd.DataFrame(output)
+    result.rename(columns={col: _EXPORT_COLUMN_LABELS.get(col, col) for col in result.columns}, inplace=True)
+    return result
+
+
+def _build_export_filename(unit_data: dict, filename_template: str, mode: str) -> str:
+    if filename_template:
+        return _format_export_filename(filename_template, unit_data)
+    suffix = "valid" if mode == "valid" else "invalid"
+    return _safe_filename(f"{unit_data.get('district','')}_{unit_data.get('upazila','')}_{suffix}.xlsx")
 
 
 def save_live_excel_nikosh(df: pd.DataFrame, path: str, sheet_name: str, is_valid: bool = True):
@@ -673,7 +838,9 @@ def save_live_excel_nikosh(df: pd.DataFrame, path: str, sheet_name: str, is_vali
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _generate_zip_common(task_id: str, mode: str, filter_divisions: list = None,
-                         filter_districts: list = None, filter_upazila_ids: list = None):
+                         filter_districts: list = None, filter_upazila_ids: list = None,
+                         export_columns: list = None, filename_template: str = None,
+                         division_folder: bool = False):
     """Unified ZIP generator for all export types.
     
     mode: 'checked' | 'valid' | 'invalid'
@@ -743,7 +910,7 @@ def _generate_zip_common(task_id: str, mode: str, filter_divisions: list = None,
         mode_label = {"checked": "checked", "valid": "valid", "invalid": "invalid"}[mode]
         zip_filename = f"all_{mode_label}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.zip"
         zip_path = os.path.join("downloads", zip_filename)
-        
+        # When division_folder is enabled, store files under division subfolders inside the ZIP.
         need_valid = mode in ("checked", "valid")
         need_invalid = mode in ("checked", "invalid")
 
@@ -758,6 +925,8 @@ def _generate_zip_common(task_id: str, mode: str, filter_divisions: list = None,
             """Generates files for a single upazila. No DB calls inside."""
             div_name = _safe_name(unit_data["division"])
             safe_base = f"{_safe_name(unit_data['district'])}_{_safe_name(unit_data['upazila'])}"
+            file_name = _build_export_filename(unit_data, filename_template, mode)
+            arc_dir = div_name if division_folder else ""
             results = []
 
             if mode == "checked":
@@ -774,7 +943,8 @@ def _generate_zip_common(task_id: str, mode: str, filter_divisions: list = None,
                 df = ensure_dob_format(df)
                 tested_path = os.path.join(temp_dir, f"{safe_base}_tested.xlsx")
                 _write_checked_xlsx(df, invalid_mask, tested_path, warning_mask=warning_mask)
-                results.append((tested_path, f"{div_name}/{safe_base}_tested.xlsx"))
+                arc_name = f"{arc_dir}/{safe_base}_tested.xlsx" if arc_dir else f"{safe_base}_tested.xlsx"
+                results.append((tested_path, arc_name))
 
                 # Also include the invalid PDF report in the ZIP
                 if u_i:
@@ -795,25 +965,27 @@ def _generate_zip_common(task_id: str, mode: str, filter_divisions: list = None,
                         pdf_geo = {"division": unit_data["division"], "district": unit_data["district"], "upazila": unit_data["upazila"]}
                         pdf_path = generate_pdf_report(idf_pdf, pdf_stats, additional_columns=[], output_dir=temp_dir, original_filename=f"{safe_base}_Invalid", geo=pdf_geo, invalid_only=True)
                         if pdf_path:
-                            results.append((pdf_path, f"{div_name}/{safe_base}_Invalid_Report.pdf"))
+                            arc_name = f"{arc_dir}/{safe_base}_Invalid_Report.pdf" if arc_dir else f"{safe_base}_Invalid_Report.pdf"
+                            results.append((pdf_path, arc_name))
                     except Exception as e:
                         logger.warning(f"PDF generation skipped for {safe_base}: {e}")
 
             elif mode == "valid":
                 if u_v is None or (hasattr(u_v, 'empty') and u_v.empty): return None
-                from .export_routes import _export_cols
-                export_df = _export_cols(u_v)
+                export_df = _prepare_export_df(u_v, export_columns)
                 export_df = ensure_dob_format(export_df)
-                t_file = os.path.join(temp_dir, f"{safe_base}_valid.xlsx")
+                t_file = os.path.join(temp_dir, file_name)
                 save_live_excel_nikosh(export_df, t_file, "Valid Records", is_valid=True)
-                results.append((t_file, f"{div_name}/{safe_base}_valid.xlsx"))
+                arc_name = f"{arc_dir}/{file_name}" if arc_dir else file_name
+                results.append((t_file, arc_name))
 
             elif mode == "invalid":
                 if u_i is None or (hasattr(u_i, 'empty') and u_i.empty): return None
                 u_i_formatted = ensure_dob_format(u_i)
-                t_file = os.path.join(temp_dir, f"{safe_base}_invalid.xlsx")
+                t_file = os.path.join(temp_dir, file_name)
                 save_live_excel_nikosh(u_i_formatted, t_file, "Invalid Records", is_valid=False)
-                results.append((t_file, f"{div_name}/{safe_base}_invalid.xlsx"))
+                arc_name = f"{arc_dir}/{file_name}" if arc_dir else file_name
+                results.append((t_file, arc_name))
                 # PDF
                 idf_pdf = u_i.copy()
                 idf_pdf["Status"] = "error"
@@ -823,7 +995,9 @@ def _generate_zip_common(task_id: str, mode: str, filter_divisions: list = None,
                 pdf_geo = {"division": unit_data["division"], "district": unit_data["district"], "upazila": unit_data["upazila"]}
                 try:
                     t_pdf = generate_pdf_report(idf_pdf, pdf_stats, additional_columns=[], output_dir=temp_dir, original_filename=f"{safe_base}_invalid", geo=pdf_geo, invalid_only=True)
-                    if t_pdf: results.append((t_pdf, f"{div_name}/{safe_base}_invalid.pdf"))
+                    if t_pdf:
+                        arc_name = f"{arc_dir}/{safe_base}_invalid.pdf" if arc_dir else f"{safe_base}_invalid.pdf"
+                        results.append((t_pdf, arc_name))
                 except: pass
 
             return results
@@ -1055,6 +1229,9 @@ class SelectiveExportRequest(BaseModel):
     divisions: Optional[List[str]] = None
     districts: Optional[List[str]] = None
     upazila_ids: Optional[List[int]] = None
+    columns: Optional[List[str]] = None
+    filename_template: Optional[str] = None
+    division_folder: bool = False
 
 
 @router.post("/zip-selected", dependencies=[Depends(PermissionChecker("view_stats"))])
@@ -1085,11 +1262,21 @@ def start_selected_zip_task(
     )
     db.add(task)
     db.commit()
+    try:
+        export_columns = _normalize_export_columns(req.columns)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if req.mode not in {"checked", "valid", "invalid"}:
+        raise HTTPException(status_code=400, detail="mode must be one of checked, valid, invalid")
+
     background_tasks.add_task(
         _generate_zip_common, task_id, req.mode,
         filter_divisions=req.divisions,
         filter_districts=req.districts,
         filter_upazila_ids=req.upazila_ids,
+        export_columns=export_columns,
+        filename_template=req.filename_template,
+        division_folder=req.division_folder,
     )
     return {"task_id": task_id, "status": "started"}
 # ─────────────────────────────────────────────────────────────────────────────
