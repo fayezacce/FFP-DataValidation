@@ -88,7 +88,8 @@ def get_live_records_df(
         query_sql += " AND division = :div AND district = :dist AND upazila = :upz"
         params.update({"div": division, "dist": district, "upz": upazila})
     else:
-        query_sql += " AND 1=0"
+        # No filter — fetch all records (country-wide)
+        pass
 
     if is_invalid:
         query_sql += " ORDER BY id DESC"
@@ -750,11 +751,9 @@ def _normalize_export_columns(requested_columns: list) -> list:
     return normalized
 
 
-def _format_export_filename(template: str, unit_data: dict) -> str:
+def _format_export_filename(template: str, unit_data: dict, ext: str = ".xlsx") -> str:
     if not template:
         template = "{district}_{upazila}_Approved_NID_NotVerified_FFP_List.xlsx"
-    if not template.lower().endswith(".xlsx"):
-        template = template + ".xlsx"
     safe_vars = {
         "division": _safe_filename(unit_data.get("division")),
         "district": _safe_filename(unit_data.get("district")),
@@ -762,15 +761,21 @@ def _format_export_filename(template: str, unit_data: dict) -> str:
         "division_name": _safe_filename(unit_data.get("division")),
         "district_name": _safe_filename(unit_data.get("district")),
         "upazila_name": _safe_filename(unit_data.get("upazila")),
+        "ext": ext.lstrip("."),
+        "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "time": datetime.now(timezone.utc).strftime("%H-%M-%S"),
     }
     has_geo_placeholder = any(tok in template for tok in ["{division}", "{district}", "{upazila}", "{division_name}", "{district_name}", "{upazila_name}"])
     try:
         filename = template.format_map(defaultdict(str, safe_vars))
     except Exception:
         filename = template
+    if not filename.lower().endswith(ext.lower()):
+        filename = filename + ext
     if not has_geo_placeholder:
         safe_base = _safe_filename(f"{unit_data.get('district','')}_{unit_data.get('upazila','')}")
-        filename = filename.replace(".xlsx", f"_{safe_base}.xlsx")
+        base, cur_ext = os.path.splitext(filename)
+        filename = f"{base}_{safe_base}{cur_ext}"
     return _safe_filename(filename)
 
 
@@ -851,11 +856,11 @@ def _prepare_export_df(df: pd.DataFrame, columns: list = None) -> pd.DataFrame:
     return result
 
 
-def _build_export_filename(unit_data: dict, filename_template: str, mode: str) -> str:
+def _build_export_filename(unit_data: dict, filename_template: str, mode: str, ext: str = ".xlsx") -> str:
     if filename_template:
-        return _format_export_filename(filename_template, unit_data)
+        return _format_export_filename(filename_template, unit_data, ext=ext)
     suffix = "valid" if mode == "valid" else "invalid"
-    return _safe_filename(f"{unit_data.get('district','')}_{unit_data.get('upazila','')}_{suffix}.xlsx")
+    return _safe_filename(f"{unit_data.get('district','')}_{unit_data.get('upazila','')}_{suffix}{ext}")
 
 
 def save_live_excel_nikosh(df: pd.DataFrame, path: str, sheet_name: str, is_valid: bool = True):
@@ -868,6 +873,42 @@ def save_live_excel_nikosh(df: pd.DataFrame, path: str, sheet_name: str, is_vali
     _write_checked_xlsx(df, mask, path)
 
 
+def _write_csv_file(df: pd.DataFrame, path: str, columns: list = None):
+    """Write a pipe-delimited CSV file. Uses all df columns if no columns specified."""
+    import csv
+    if columns:
+        available = [c for c in columns if c in df.columns]
+        if not available:
+            available = list(df.columns)
+    else:
+        available = list(df.columns)
+    with open(path, 'w', encoding='utf-8-sig', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=available, delimiter='|')
+        writer.writeheader()
+        for _, row in df.iterrows():
+            out = {h: row.get(h, "") for h in available}
+            writer.writerow(out)
+
+
+def _write_export_file(df: pd.DataFrame, path: str, fmt: str,
+                       sheet_name: str = "Records", is_valid: bool = True,
+                       columns: list = None):
+    """Dispatch to the correct file writer based on format. Returns the path written."""
+    if fmt == "csv":
+        _write_csv_file(df, path, columns)
+        return path
+    elif fmt == "pdf":
+        stats = {"total_rows": len(df), "issues": 0, "converted_nid": 0}
+        geo = {}
+        return generate_pdf_report(df, stats, additional_columns=columns or [],
+                                   output_dir=os.path.dirname(path),
+                                   original_filename=os.path.splitext(os.path.basename(path))[0],
+                                   geo=geo, invalid_only=not is_valid)
+    else:
+        save_live_excel_nikosh(df, path, sheet_name, is_valid=is_valid)
+        return path
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # ZIP GENERATION — background tasks for bulk exports (OPTIMIZED)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -875,7 +916,8 @@ def save_live_excel_nikosh(df: pd.DataFrame, path: str, sheet_name: str, is_vali
 def _generate_zip_common(task_id: str, mode: str, filter_divisions: list = None,
                          filter_districts: list = None, filter_upazila_ids: list = None,
                          export_columns: list = None, filename_template: str = None,
-                         division_folder: bool = False):
+                         division_folder: bool = False, export_fmt: str = "xlsx",
+                         group_by: str = "upazila", column_order: list = None):
     """Unified ZIP generator for all export types.
     
     mode: 'checked' | 'valid' | 'invalid'
@@ -955,12 +997,23 @@ def _generate_zip_common(task_id: str, mode: str, filter_divisions: list = None,
         for entry in entries:
             grouped_work[(entry.division, entry.district)].append(entry)
 
+        # For aggregated grouping, pre-compute group keys
+        if group_by == "division":
+            div_grouped = defaultdict(list)
+            for (div, dist), sub in grouped_work.items():
+                div_grouped[div].extend(sub)
+        elif group_by == "none":
+            all_entries = [e for sub in grouped_work.values() for e in sub]
+        else:
+            pass  # upazila (default) — keep existing grouped_work
+
         # Worker for CPU-heavy tasks (Excel/PDF generation)
         def process_upazila_files(unit_data, u_v, u_i):
             """Generates files for a single upazila. No DB calls inside."""
             div_name = _safe_name(unit_data["division"])
             safe_base = f"{_safe_name(unit_data['district'])}_{_safe_name(unit_data['upazila'])}"
-            file_name = _build_export_filename(unit_data, filename_template, mode)
+            file_ext = ".csv" if export_fmt == "csv" else ".pdf" if export_fmt == "pdf" else ".xlsx"
+            file_name = _build_export_filename(unit_data, filename_template, mode, ext=file_ext)
             arc_dir = div_name if division_folder else ""
             results = []
 
@@ -976,10 +1029,26 @@ def _generate_zip_common(task_id: str, mode: str, filter_divisions: list = None,
                     df = _restore_original_headers(df, stored_headers, forward_map)
 
                 df = ensure_dob_format(df)
-                tested_path = os.path.join(temp_dir, f"{safe_base}_tested.xlsx")
-                _write_checked_xlsx(df, invalid_mask, tested_path, warning_mask=warning_mask)
-                arc_name = f"{arc_dir}/{safe_base}_tested.xlsx" if arc_dir else f"{safe_base}_tested.xlsx"
-                results.append((tested_path, arc_name))
+                if export_fmt == "xlsx":
+                    tested_path = os.path.join(temp_dir, f"{safe_base}_tested.xlsx")
+                    _write_checked_xlsx(df, invalid_mask, tested_path, warning_mask=warning_mask)
+                    arc_name = f"{arc_dir}/{safe_base}_tested.xlsx" if arc_dir else f"{safe_base}_tested.xlsx"
+                    results.append((tested_path, arc_name))
+                elif export_fmt == "csv":
+                    csv_path = os.path.join(temp_dir, f"{safe_base}_tested.csv")
+                    _write_csv_file(df, csv_path)
+                    arc_name = f"{arc_dir}/{safe_base}_tested.csv" if arc_dir else f"{safe_base}_tested.csv"
+                    results.append((csv_path, arc_name))
+                else:  # pdf
+                    pdf_path = os.path.join(temp_dir, f"{safe_base}_tested.pdf")
+                    pdf_stats = {"total_rows": len(df), "issues": len(df[invalid_mask]) if invalid_mask else 0, "converted_nid": 0}
+                    pdf_geo = {"division": unit_data.get("division",""), "district": unit_data.get("district",""), "upazila": unit_data.get("upazila","")}
+                    pdf_path = generate_pdf_report(df, pdf_stats, additional_columns=list(df.columns),
+                                                   output_dir=temp_dir, original_filename=f"{safe_base}_tested",
+                                                   geo=pdf_geo, invalid_only=False)
+                    if pdf_path:
+                        arc_name = f"{arc_dir}/{safe_base}_tested.pdf" if arc_dir else f"{safe_base}_tested.pdf"
+                        results.append((pdf_path, arc_name))
 
                 # Also include the invalid PDF report in the ZIP
                 if u_i:
@@ -1009,31 +1078,36 @@ def _generate_zip_common(task_id: str, mode: str, filter_divisions: list = None,
                 if u_v is None or (hasattr(u_v, 'empty') and u_v.empty): return None
                 export_df = _prepare_export_df(u_v, export_columns)
                 export_df = ensure_dob_format(export_df)
-                t_file = os.path.join(temp_dir, file_name)
-                save_live_excel_nikosh(export_df, t_file, "Valid Records", is_valid=True)
-                arc_name = f"{arc_dir}/{file_name}" if arc_dir else file_name
-                results.append((t_file, arc_name))
+                ext = ".csv" if export_fmt == "csv" else ".pdf" if export_fmt == "pdf" else ".xlsx"
+                t_file = os.path.join(temp_dir, file_name.replace(".xlsx", ext))
+                written = _write_export_file(export_df, t_file, export_fmt, "Valid Records", is_valid=True, columns=export_columns)
+                if written:
+                    arc_name = f"{arc_dir}/{os.path.basename(written)}" if arc_dir else os.path.basename(written)
+                    results.append((written, arc_name))
 
             elif mode == "invalid":
                 if u_i is None or (hasattr(u_i, 'empty') and u_i.empty): return None
                 u_i_formatted = ensure_dob_format(u_i)
-                t_file = os.path.join(temp_dir, file_name)
-                save_live_excel_nikosh(u_i_formatted, t_file, "Invalid Records", is_valid=False)
-                arc_name = f"{arc_dir}/{file_name}" if arc_dir else file_name
-                results.append((t_file, arc_name))
-                # PDF
-                idf_pdf = u_i.copy()
-                idf_pdf["Status"] = "error"
-                idf_pdf["Message"] = idf_pdf.get("error_message", "Invalid")
-                idf_pdf["Excel_Row"] = range(2, len(idf_pdf) + 2)
-                pdf_stats = {"total_rows": len(idf_pdf), "issues": len(idf_pdf), "converted_nid": 0}
-                pdf_geo = {"division": unit_data["division"], "district": unit_data["district"], "upazila": unit_data["upazila"]}
-                try:
-                    t_pdf = generate_pdf_report(idf_pdf, pdf_stats, additional_columns=[], output_dir=temp_dir, original_filename=f"{safe_base}_invalid", geo=pdf_geo, invalid_only=True)
-                    if t_pdf:
-                        arc_name = f"{arc_dir}/{safe_base}_invalid.pdf" if arc_dir else f"{safe_base}_invalid.pdf"
-                        results.append((t_pdf, arc_name))
-                except: pass
+                ext = ".csv" if export_fmt == "csv" else ".pdf" if export_fmt == "pdf" else ".xlsx"
+                t_file = os.path.join(temp_dir, file_name.replace(".xlsx", ext))
+                written = _write_export_file(u_i_formatted, t_file, export_fmt, "Invalid Records", is_valid=False, columns=export_columns)
+                if written:
+                    arc_name = f"{arc_dir}/{os.path.basename(written)}" if arc_dir else os.path.basename(written)
+                    results.append((written, arc_name))
+                # Always include PDF report for invalid records alongside the main file
+                if export_fmt != "pdf":
+                    idf_pdf = u_i.copy()
+                    idf_pdf["Status"] = "error"
+                    idf_pdf["Message"] = idf_pdf.get("error_message", "Invalid")
+                    idf_pdf["Excel_Row"] = range(2, len(idf_pdf) + 2)
+                    pdf_stats = {"total_rows": len(idf_pdf), "issues": len(idf_pdf), "converted_nid": 0}
+                    pdf_geo = {"division": unit_data["division"], "district": unit_data["district"], "upazila": unit_data["upazila"]}
+                    try:
+                        t_pdf = generate_pdf_report(idf_pdf, pdf_stats, additional_columns=[], output_dir=temp_dir, original_filename=f"{safe_base}_invalid", geo=pdf_geo, invalid_only=True)
+                        if t_pdf:
+                            arc_name = f"{arc_dir}/{safe_base}_invalid.pdf" if arc_dir else f"{safe_base}_invalid.pdf"
+                            results.append((t_pdf, arc_name))
+                    except: pass
 
             return results
 
@@ -1100,72 +1174,101 @@ def _generate_zip_common(task_id: str, mode: str, filter_divisions: list = None,
                         if need_invalid:
                             dist_i_df = get_live_records_df(db, is_invalid=True, upazila_ids=uids if uids else None, division=div if not uids else None, district=dist if not uids else None)
 
-                    # 2. Slice and parallelize upazilas in this district
+                    # 2. Determine entries for this batch based on group_by
+                    if group_by == "upazila":
+                        batch_entries = sub_entries
+                    elif group_by == "district":
+                        # One file per district — process the whole district as one unit
+                        batch_entries = sub_entries
+                    elif group_by == "division":
+                        # Handled via div_grouped — skip district-level processing for upazila
+                        batch_entries = []
+                    else:  # none
+                        batch_entries = []
+
                     futures = []
-                    for entry in sub_entries:
-                        # For checked mode: use raw data dicts keyed by upazila_id or entry.id (fallback)
-                        if mode == "checked":
-                            key = entry.upazila_id if entry.upazila_id else entry.id
-                            raw_v_slice = dist_raw_valid.get(key, [])
-                            raw_i_slice = dist_raw_invalid.get(key, [])
+                    if group_by == "upazila":
+                        for entry in sub_entries:
+                            # For checked mode: use raw data dicts keyed by upazila_id or entry.id (fallback)
+                            if mode == "checked":
+                                key = entry.upazila_id if entry.upazila_id else entry.id
+                                raw_v_slice = dist_raw_valid.get(key, [])
+                                raw_i_slice = dist_raw_invalid.get(key, [])
 
-                            # ── upazila_id mismatch fallback ─────────────────────────────────
-                            # The bulk fetch above uses integer upazila_id. It silently misses
-                            # records where upazila_id is either NULL (never backfilled) or holds
-                            # a WRONG value (uploaded with stale/renamed geo, then backfill was
-                            # not run, or a rename changed the canonical ID).
-                            # If the ID-based slice is empty but SummaryStats says data exists,
-                            # re-query by text name (no upazila_id filter) as the authoritative
-                            # source of truth. Deduplication is not needed because the ID path
-                            # already returned nothing for this upazila.
-                            if not raw_i_slice and entry.invalid and entry.invalid > 0:
-                                fallback_i = db.execute(
-                                    text("SELECT data FROM invalid_records"
-                                         " WHERE LOWER(TRIM(district)) = LOWER(TRIM(:dist))"
-                                         " AND LOWER(TRIM(upazila)) = LOWER(TRIM(:upz))"),
-                                    {"dist": entry.district, "upz": entry.upazila}
-                                ).fetchall()
-                                raw_i_slice = [_parse(d) for (d,) in fallback_i]
-                                if raw_i_slice:
-                                    logger.info("ZIP checked fallback: found %d invalid rows for %s via text-match (upazila_id mismatch)",
-                                                len(raw_i_slice), entry.upazila)
+                                if not raw_i_slice and entry.invalid and entry.invalid > 0:
+                                    fallback_i = db.execute(
+                                        text("SELECT data FROM invalid_records"
+                                             " WHERE LOWER(TRIM(district)) = LOWER(TRIM(:dist))"
+                                             " AND LOWER(TRIM(upazila)) = LOWER(TRIM(:upz))"),
+                                        {"dist": entry.district, "upz": entry.upazila}
+                                    ).fetchall()
+                                    raw_i_slice = [_parse(d) for (d,) in fallback_i]
+
+                                if not raw_v_slice and entry.valid and entry.valid > 0:
+                                    fallback_v = db.execute(
+                                        text("SELECT data FROM valid_records"
+                                             " WHERE LOWER(TRIM(district)) = LOWER(TRIM(:dist))"
+                                             " AND LOWER(TRIM(upazila)) = LOWER(TRIM(:upz))"),
+                                        {"dist": entry.district, "upz": entry.upazila}
+                                    ).fetchall()
+                                    raw_v_slice = [_parse(d) for (d,) in fallback_v]
+
+                                u_v = raw_v_slice
+                                u_i = raw_i_slice
+                            else:
+                                if dist_v_df is not None and not dist_v_df.empty:
+                                    u_v = dist_v_df[dist_v_df["Upazila"] == entry.upazila]
                                 else:
-                                    logger.warning("ZIP checked: STALE STATS — SummaryStats.invalid=%d for %s/%s (upazila_id=%s) but 0 rows found in invalid_records by both ID and text-match. Run 'Refresh All Stats' to fix.",
-                                                   entry.invalid, entry.district, entry.upazila, entry.upazila_id)
+                                    u_v = pd.DataFrame()
+                                if dist_i_df is not None and not dist_i_df.empty:
+                                    u_i = dist_i_df[dist_i_df["Upazila"] == entry.upazila]
+                                else:
+                                    u_i = pd.DataFrame()
 
-                            if not raw_v_slice and entry.valid and entry.valid > 0:
-                                fallback_v = db.execute(
-                                    text("SELECT data FROM valid_records"
-                                         " WHERE LOWER(TRIM(district)) = LOWER(TRIM(:dist))"
-                                         " AND LOWER(TRIM(upazila)) = LOWER(TRIM(:upz))"),
-                                    {"dist": entry.district, "upz": entry.upazila}
-                                ).fetchall()
-                                raw_v_slice = [_parse(d) for (d,) in fallback_v]
-                                if raw_v_slice:
-                                    logger.info("ZIP checked fallback: found %d valid rows for %s via text-match (upazila_id mismatch)",
-                                                len(raw_v_slice), entry.upazila)
+                            unit_data = {
+                                "division": entry.division,
+                                "district": entry.district,
+                                "upazila": entry.upazila,
+                                "upazila_id": entry.upazila_id,
+                                "column_headers": entry.column_headers
+                            }
+                            futures.append(executor.submit(process_upazila_files, unit_data, u_v, u_i))
 
-                            u_v = raw_v_slice
-                            u_i = raw_i_slice
+                    elif group_by == "district":
+                        # One file per district — use the full district DataFrames
+                        if mode == "checked":
+                            # Aggregate all raw dicts across upazilas in this district
+                            all_raw_v = []
+                            all_raw_i = []
+                            for entry in sub_entries:
+                                key = entry.upazila_id if entry.upazila_id else entry.id
+                                all_raw_v.extend(dist_raw_valid.get(key, []))
+                                all_raw_i.extend(dist_raw_invalid.get(key, []))
+                            unit_data = {
+                                "division": div,
+                                "district": dist,
+                                "upazila": f"{dist}_District",
+                                "upazila_id": None,
+                                "column_headers": None,
+                            }
+                            futures.append(executor.submit(process_upazila_files, unit_data, all_raw_v, all_raw_i))
                         else:
-                            # Slice DataFrames for valid/invalid modes
                             if dist_v_df is not None and not dist_v_df.empty:
-                                u_v = dist_v_df[dist_v_df["Upazila"] == entry.upazila]
+                                u_v = dist_v_df
                             else:
                                 u_v = pd.DataFrame()
                             if dist_i_df is not None and not dist_i_df.empty:
-                                u_i = dist_i_df[dist_i_df["Upazila"] == entry.upazila]
+                                u_i = dist_i_df
                             else:
                                 u_i = pd.DataFrame()
-
-                        unit_data = {
-                            "division": entry.division,
-                            "district": entry.district,
-                            "upazila": entry.upazila,
-                            "upazila_id": entry.upazila_id,
-                            "column_headers": entry.column_headers
-                        }
-                        futures.append(executor.submit(process_upazila_files, unit_data, u_v, u_i))
+                            unit_data = {
+                                "division": div,
+                                "district": dist,
+                                "upazila": f"{dist}_District",
+                                "upazila_id": None,
+                                "column_headers": None,
+                            }
+                            futures.append(executor.submit(process_upazila_files, unit_data, u_v, u_i))
 
                     # 3. Collect from workers and write to ZIP
                     for future in as_completed(futures):
@@ -1181,6 +1284,85 @@ def _generate_zip_common(task_id: str, mode: str, filter_divisions: list = None,
                     task.progress = int((processed / total_entries) * 100)
                     task.message = f"Processed {processed}/{total_entries} upazilas..."
                     db.commit()
+
+            # ── Division-level grouping (second pass) ──
+            if group_by == "division" and div_grouped:
+                task.message = "Generating division-level files..."
+                db.commit()
+                for div_name, div_entries in div_grouped.items():
+                    div_uids = [e.upazila_id for e in div_entries if e.upazila_id]
+                    if mode == "checked":
+                        all_raw_v = []
+                        all_raw_i = []
+                        if div_uids:
+                            raw_v = db.execute(
+                                text("SELECT data FROM valid_records WHERE upazila_id = ANY(:uids)"),
+                                {"uids": div_uids}
+                            ).fetchall()
+                            all_raw_v = [_parse(d) for (d,) in raw_v]
+                            raw_i = db.execute(
+                                text("SELECT data FROM invalid_records WHERE upazila_id = ANY(:uids)"),
+                                {"uids": div_uids}
+                            ).fetchall()
+                            all_raw_i = [_parse(d) for (d,) in raw_i]
+                        unit_data = {"division": div_name, "district": "", "upazila": f"{div_name}_Division", "upazila_id": None, "column_headers": None}
+                        for fut in [executor.submit(process_upazila_files, unit_data, all_raw_v, all_raw_i)]:
+                            file_res = fut.result()
+                            if file_res:
+                                for f_path, arc_name in file_res:
+                                    zipf.write(f_path, arcname=arc_name)
+                                    try: os.remove(f_path)
+                                    except: pass
+                    else:
+                        div_v_df = get_live_records_df(db, is_invalid=False, upazila_ids=div_uids) if need_valid else pd.DataFrame()
+                        div_i_df = get_live_records_df(db, is_invalid=True, upazila_ids=div_uids) if need_invalid else pd.DataFrame()
+                        unit_data = {"division": div_name, "district": "", "upazila": f"{div_name}_Division", "upazila_id": None, "column_headers": None}
+                        for fut in [executor.submit(process_upazila_files, unit_data, div_v_df, div_i_df)]:
+                            file_res = fut.result()
+                            if file_res:
+                                for f_path, arc_name in file_res:
+                                    zipf.write(f_path, arcname=arc_name)
+                                    try: os.remove(f_path)
+                                    except: pass
+
+            # ── Country-wide single file (group_by none) ──
+            if group_by == "none" and all_entries:
+                task.message = "Generating country-wide single file..."
+                db.commit()
+                all_uids = [e.upazila_id for e in all_entries if e.upazila_id]
+                if mode == "checked":
+                    all_raw_v = []
+                    all_raw_i = []
+                    if all_uids:
+                        raw_v = db.execute(
+                            text("SELECT data FROM valid_records WHERE upazila_id = ANY(:uids)"),
+                            {"uids": all_uids}
+                        ).fetchall()
+                        all_raw_v = [_parse(d) for (d,) in raw_v]
+                        raw_i = db.execute(
+                            text("SELECT data FROM invalid_records WHERE upazila_id = ANY(:uids)"),
+                            {"uids": all_uids}
+                        ).fetchall()
+                        all_raw_i = [_parse(d) for (d,) in raw_i]
+                    unit_data = {"division": "Country", "district": "", "upazila": "Country_Wide", "upazila_id": None, "column_headers": None}
+                    for fut in [executor.submit(process_upazila_files, unit_data, all_raw_v, all_raw_i)]:
+                        file_res = fut.result()
+                        if file_res:
+                            for f_path, arc_name in file_res:
+                                zipf.write(f_path, arcname=arc_name)
+                                try: os.remove(f_path)
+                                except: pass
+                else:
+                    none_v_df = get_live_records_df(db, is_invalid=False, upazila_ids=all_uids) if need_valid else pd.DataFrame()
+                    none_i_df = get_live_records_df(db, is_invalid=True, upazila_ids=all_uids) if need_invalid else pd.DataFrame()
+                    unit_data = {"division": "Country", "district": "", "upazila": "Country_Wide", "upazila_id": None, "column_headers": None}
+                    for fut in [executor.submit(process_upazila_files, unit_data, none_v_df if need_valid else pd.DataFrame(), none_i_df if need_invalid else pd.DataFrame())]:
+                        file_res = fut.result()
+                        if file_res:
+                            for f_path, arc_name in file_res:
+                                zipf.write(f_path, arcname=arc_name)
+                                try: os.remove(f_path)
+                                except: pass
 
         if not os.path.exists(zip_path) or os.path.getsize(zip_path) < 100:
             if os.path.exists(zip_path): os.remove(zip_path)
@@ -1265,8 +1447,11 @@ class SelectiveExportRequest(BaseModel):
     districts: Optional[List[str]] = None
     upazila_ids: Optional[List[int]] = None
     columns: Optional[List[str]] = None
+    column_order: Optional[List[str]] = None  # preserves user ordering
     filename_template: Optional[str] = None
     division_folder: bool = False
+    fmt: str = "xlsx"  # xlsx | csv | pdf
+    group_by: str = "upazila"  # upazila | district | division | none
 
 
 @router.post("/zip-selected", dependencies=[Depends(PermissionChecker("view_stats"))])
@@ -1303,6 +1488,10 @@ def start_selected_zip_task(
         raise HTTPException(status_code=400, detail=str(exc))
     if req.mode not in {"checked", "valid", "invalid"}:
         raise HTTPException(status_code=400, detail="mode must be one of checked, valid, invalid")
+    if req.fmt not in {"xlsx", "csv", "pdf"}:
+        raise HTTPException(status_code=400, detail="fmt must be one of xlsx, csv, pdf")
+    if req.group_by not in {"upazila", "district", "division", "none"}:
+        raise HTTPException(status_code=400, detail="group_by must be one of upazila, district, division, none")
 
     background_tasks.add_task(
         _generate_zip_common, task_id, req.mode,
@@ -1312,6 +1501,9 @@ def start_selected_zip_task(
         export_columns=export_columns,
         filename_template=req.filename_template,
         division_folder=req.division_folder,
+        export_fmt=req.fmt,
+        group_by=req.group_by,
+        column_order=req.column_order,
     )
     return {"task_id": task_id, "status": "started"}
 # ─────────────────────────────────────────────────────────────────────────────
