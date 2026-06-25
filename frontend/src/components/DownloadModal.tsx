@@ -2,41 +2,39 @@
 
 import React, { useState, useMemo, useEffect } from "react";
 import {
-  X, Download, ChevronUp, ChevronDown, MapPin, CheckCircle2,
+  X, Download, ChevronUp, ChevronDown, GripVertical, MapPin, CheckCircle2,
   FileWarning, FileSpreadsheet, FileText, Square, CheckSquare
 } from "lucide-react";
 import { fetchWithAuth } from "@/lib/auth";
 
 const COLUMN_OPTIONS = [
-  { value: "card_no", label: "Card No" },
+  { value: "division", label: "Division" },
+  { value: "district", label: "District" },
+  { value: "upazila", label: "Upazila" },
+  { value: "union_name", label: "Union Name" },
   { value: "serial_no", label: "Serial No" },
   { value: "name_bn", label: "Name (BN)" },
   { value: "name_en", label: "Name (EN)" },
   { value: "father_husband_name", label: "Father/Husband Name" },
   { value: "dob", label: "DOB" },
-  { value: "nid_number", label: "NID Number" },
+  { value: "occupation", label: "Occupation" },
+  { value: "address", label: "Village Name" },
+  { value: "ward", label: "Ward No" },
+  { value: "nid_17", label: "NID (17 digit)" },
+  { value: "nid_10", label: "NID (10 digit)" },
   { value: "mobile", label: "Mobile No" },
   { value: "gender", label: "Gender" },
   { value: "religion", label: "Religion" },
-  { value: "occupation", label: "Occupation" },
   { value: "spouse_name", label: "Spouse Name" },
   { value: "spouse_nid", label: "Spouse NID" },
   { value: "spouse_dob", label: "Spouse DOB" },
-  { value: "address", label: "Village Name" },
-  { value: "ward", label: "Ward No" },
-  { value: "union_name", label: "Union Name" },
-  { value: "dealer_name", label: "Dealer Name" },
-  { value: "dealer_nid", label: "Dealer NID" },
-  { value: "dealer_mobile", label: "Dealer Mobile" },
-  { value: "beneficiary_type", label: "Beneficiary Type" },
-  { value: "division", label: "Division" },
-  { value: "district", label: "District" },
-  { value: "upazila", label: "Upazila" },
 ];
 
 const DEFAULT_COLUMNS = [
-  "card_no", "name_bn", "name_en", "father_husband_name",
-  "dob", "nid_number", "division", "district", "upazila",
+  "division", "district", "upazila", "union_name", "serial_no",
+  "name_bn", "name_en", "father_husband_name", "dob", "occupation",
+  "address", "ward", "nid_17", "nid_10", "mobile", "gender",
+  "religion", "spouse_name", "spouse_nid", "spouse_dob",
 ];
 
 type DownloadLevel = "country" | "division" | "district" | "upazila" | "custom";
@@ -73,7 +71,7 @@ export default function DownloadModal({
   const [columns, setColumns] = useState<string[]>(DEFAULT_COLUMNS);
 
   // Step 4: Filename template
-  const DEFAULT_TEMPLATE = "%District%_%Upazila%_FFP_Data";
+  const DEFAULT_TEMPLATE = "%District%_Approved_NID_NotVerified_FFP_List";
   const [filenameTemplate, setFilenameTemplate] = useState(DEFAULT_TEMPLATE);
 
   // Download state
@@ -227,6 +225,39 @@ export default function DownloadModal({
       }
       return next;
     });
+  };
+
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+
+  const handleDragStart = (idx: number) => {
+    setDragIndex(idx);
+  };
+
+  const handleDragOver = (e: React.DragEvent, idx: number) => {
+    e.preventDefault();
+    setDragOverIndex(idx);
+  };
+
+  const handleDrop = (idx: number) => {
+    if (dragIndex === null || dragIndex === idx) {
+      setDragIndex(null);
+      setDragOverIndex(null);
+      return;
+    }
+    setColumns(prev => {
+      const next = [...prev];
+      const [moved] = next.splice(dragIndex, 1);
+      next.splice(idx, 0, moved);
+      return next;
+    });
+    setDragIndex(null);
+    setDragOverIndex(null);
+  };
+
+  const handleDragEnd = () => {
+    setDragIndex(null);
+    setDragOverIndex(null);
   };
 
   // Template variable helpers
@@ -519,11 +550,20 @@ export default function DownloadModal({
                 {COLUMN_OPTIONS.map((col) => {
                   const idx = columns.indexOf(col.value);
                   const checked = idx !== -1;
+                  const isDragging = dragIndex === idx;
+                  const isDragOver = dragOverIndex === idx;
                   return (
                     <div
                       key={col.value}
+                      draggable={checked}
+                      onDragStart={() => handleDragStart(idx)}
+                      onDragOver={(e) => handleDragOver(e, idx)}
+                      onDrop={() => handleDrop(idx)}
+                      onDragEnd={handleDragEnd}
                       className={`flex items-center gap-2 px-4 py-2.5 transition-colors ${
                         checked ? "bg-slate-800/30" : "bg-transparent"
+                      } ${isDragging ? "opacity-40" : ""} ${
+                        isDragOver && checked ? "border-t-2 border-cyan-400" : ""
                       }`}
                     >
                       <label className="flex items-center gap-3 flex-1 cursor-pointer min-w-0">
@@ -538,22 +578,27 @@ export default function DownloadModal({
                         </span>
                       </label>
 
-                      <div className="flex items-center gap-1 shrink-0">
-                        <button
-                          onClick={() => moveColumn(col.value, "up")}
-                          disabled={!checked || idx === 0}
-                          className="p-1 rounded hover:bg-slate-700/50 disabled:opacity-20 disabled:cursor-not-allowed text-slate-400 hover:text-white transition-colors"
-                        >
-                          <ChevronUp className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => moveColumn(col.value, "down")}
-                          disabled={!checked || idx === columns.length - 1}
-                          className="p-1 rounded hover:bg-slate-700/50 disabled:opacity-20 disabled:cursor-not-allowed text-slate-400 hover:text-white transition-colors"
-                        >
-                          <ChevronDown className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
+                      {checked && (
+                        <div className="flex items-center gap-1 shrink-0">
+                          <span className="cursor-grab active:cursor-grabbing text-slate-500 hover:text-slate-300 transition-colors" title="Drag to reorder">
+                            <GripVertical className="w-3.5 h-3.5" />
+                          </span>
+                          <button
+                            onClick={() => moveColumn(col.value, "up")}
+                            disabled={idx === 0}
+                            className="p-1 rounded hover:bg-slate-700/50 disabled:opacity-20 disabled:cursor-not-allowed text-slate-400 hover:text-white transition-colors"
+                          >
+                            <ChevronUp className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => moveColumn(col.value, "down")}
+                            disabled={idx === columns.length - 1}
+                            className="p-1 rounded hover:bg-slate-700/50 disabled:opacity-20 disabled:cursor-not-allowed text-slate-400 hover:text-white transition-colors"
+                          >
+                            <ChevronDown className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
                     </div>
                   );
                 })}

@@ -48,7 +48,9 @@ def clean_dob(value) -> tuple[str, str]:
         "%d-%m-%Y",      # 31-12-1990
         "%Y/%m/%d",      # 1990/12/31
         "%d-%b-%Y",      # 31-Dec-1990
-        "%d-%m-%y"       # 31-12-90
+        "%d-%m-%y",      # 31-12-90
+        "%d.%m.%Y",      # 31.12.1990
+        "%Y.%m.%d",      # 1990.12.31
     ]
     
     date_only = val_str.split(' ')[0]
@@ -150,65 +152,62 @@ def validate_nid(nid_raw, dob_year, tz_limit: int = 0, tz_whitelist: set = None)
 def resolve_column_name(target: str, available_cols: list) -> str:
     """
     Finds the best match for target in available_cols.
-    1. Exact match
-    2. Case-insensitive/trimmed match
-    3. Slug match (respecting duplicate indices if present)
+    Strict matching to prevent column shifts.
     """
-    if target in available_cols:
-        return target
+    if not available_cols:
+        return None
     
     available_list = [str(c) for c in available_cols]
     target_str = str(target)
     
-    # 1. Exact match (already checked above but for safety)
-    if target_str in available_list:
-        return available_cols[available_list.index(target_str)]
-        
-    # 2. Trimmed Case-insensitive
+    # 1. Exact match (case-insensitive)
     t_clean = target_str.strip().lower()
     for i, c in enumerate(available_list):
         if c.strip().lower() == t_clean:
             return available_cols[i]
             
-    # 3. Bengali Mapping (Semantic)
+    # 2. Bengali Mapping (Semantic)
     semantic_map = {
-        "name": ["উপকারভোগীর নাম", "উপকার ভোগীর নাম", "উপকারভোগীর নাম (বাংলা)", "নাম", "উপকারভোগীরনামবাংলাএনআইডি", "beneficiary name", "name"],
-        "nid": ["জাতীয় পরিচয় পত্র নম্বর", "জাতীয় পরিচয় পত্র নম্বর", "জাতীয় পরিচয়পত্র নম্বর", "জাতীয়পরিচয়পত্রনম্বর", "এনআইডি", "nid number", "nid"],
-        "dob": ["date of birth", "dob", "জন্মতারিখ", "জন্ম তারিখ", "জম্ম তারিখ", "জম্মতারিখ", "জন্মতারিখএনআইডি"],
+        "name": ["উপকারভোগীর নাম", "উপকার ভোগীর নাম", "উপকারভোগীর নাম (বাংলা)", "নাম", "beneficiary name", "name"],
+        "nid": ["জাতীয় পরিচয় পত্র নম্বর", "জাতীয় পরিচয় পত্র নম্বর", "জাতীয়পরিচয়পত্র নম্বর", "জাতীয়পরিচয়পত্রনম্বর", "এনআইডি", "nid number", "nid"],
+        "dob": ["date of birth", "dob", "জন্মতারিখ", "জন্ম তারিখ", "জম্ম তারিখ", "জম্মতারিখ"],
         "mobile": ["মোবাইল নং", "মোবাইল নম্বর", "মোবাইল নম্বর এনআইডি", "মোবাইল নং (নিজ নামে)", "mobile number", "mobile no"]
     }
     
-    t_clean = normalize_col(target_str)
+    t_norm = normalize_col(target_str)
+    # Prioritize exact match with the semantic key first
+    if t_norm in semantic_map:
+        variants = semantic_map[t_norm]
+        for v in variants:
+            v_slug = normalize_col(v)
+            for i, col in enumerate(available_list):
+                if normalize_col(col) == v_slug:
+                    # Avoid matching a column that clearly belongs to another category
+                    col_val = str(col).lower()
+                    if t_norm == "name" and ("nid" in col_val or "number" in col_val):
+                        continue
+                    return available_cols[i]
+    
+    # Then search for the target as a variant of any category
     for key, variants in semantic_map.items():
-        if t_clean == key or t_clean in [normalize_col(v) for v in variants]:
-            # If the target itself is a semantic key or variant, 
-            # check if ANY of the variants exist in available_cols
+        if t_norm in [normalize_col(v) for v in variants]:
             for v in variants:
                 v_slug = normalize_col(v)
                 for i, col in enumerate(available_list):
                     if normalize_col(col) == v_slug:
+                        col_val = str(col).lower()
+                        if key == "name" and ("nid" in col_val or "number" in col_val):
+                            continue
                         return available_cols[i]
-
-    # 4. Slug matching
-    def get_index_suffix(s):
-        # Extract .1 or (2)
-        m = re.search(r'[\.\s\(]+(\d+)[\)]*$', s)
-        return m.group(1) if m else None
-        
-    target_slug = normalize_col(target_str)
-    target_idx = get_index_suffix(target_str)
     
-    # First try: Slug + Index must match
-    for i, c in enumerate(available_list):
-        if normalize_col(c) == target_slug and get_index_suffix(c) == target_idx:
-            return available_cols[i]
-            
-    # Second try: Just Slug (takes first occurrence)
-    for i, c in enumerate(available_list):
-        if normalize_col(c) == target_slug:
+    # 3. Slug matching
+    target_slug = normalize_col(target_str)
+    for i, col in enumerate(available_list):
+        if normalize_col(col) == target_slug:
             return available_cols[i]
             
     return None
+
 
 
 def ensure_dob_format(df: pd.DataFrame, primary_dob_col: str = None) -> pd.DataFrame:
@@ -321,6 +320,9 @@ def process_dataframe(df: pd.DataFrame, dob_col: str, nid_col: str, header_row: 
         
         cleaned_dob, dob_year = clean_dob(dob_raw)
         final_nid, status, message = validate_nid(nid_raw, dob_year, tz_limit, tz_whitelist)
+        
+        if not cleaned_dob:
+            status, message = "error", "Invalid Date"
         
         cleaned_dobs[i] = cleaned_dob if cleaned_dob else "Invalid Date"
         dob_years[i] = dob_year

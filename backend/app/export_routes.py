@@ -754,6 +754,9 @@ def _normalize_export_columns(requested_columns: list) -> list:
 def _format_export_filename(template: str, unit_data: dict, ext: str = ".xlsx") -> str:
     if not template:
         template = "{district}_{upazila}_Approved_NID_NotVerified_FFP_List.xlsx"
+    # Normalize %Var% / %VAR% / {Var} syntax to {var}
+    template = re.sub(r'%(\w+)%', lambda m: '{' + m.group(1).lower() + '}', template)
+    template = re.sub(r'\{(\w+)\}', lambda m: '{' + m.group(1).lower() + '}', template)
     safe_vars = {
         "division": _safe_filename(unit_data.get("division")),
         "district": _safe_filename(unit_data.get("district")),
@@ -822,6 +825,8 @@ def _prepare_export_df(df: pd.DataFrame, columns: list = None) -> pd.DataFrame:
     if columns is None:
         columns = _DEFAULT_VALID_EXPORT_COLUMNS.copy()
     df = df.copy()
+    # Normalize column names to lowercase for consistent matching
+    df.columns = [str(c).strip().lower() for c in df.columns]
     required_json = [c for c in columns if c in _EXPORT_JSON_FIELDS]
     if required_json and "data" in df.columns:
         df = _extract_json_fields(df, required_json)
@@ -1010,8 +1015,8 @@ def _generate_zip_common(task_id: str, mode: str, filter_divisions: list = None,
         # Worker for CPU-heavy tasks (Excel/PDF generation)
         def process_upazila_files(unit_data, u_v, u_i):
             """Generates files for a single upazila. No DB calls inside."""
-            div_name = _safe_name(unit_data["division"])
-            safe_base = f"{_safe_name(unit_data['district'])}_{_safe_name(unit_data['upazila'])}"
+            div_name = _safe_filename(unit_data["division"])
+            safe_base = f"{_safe_filename(unit_data['district'])}_{_safe_filename(unit_data['upazila'])}"
             file_ext = ".csv" if export_fmt == "csv" else ".pdf" if export_fmt == "pdf" else ".xlsx"
             file_name = _build_export_filename(unit_data, filename_template, mode, ext=file_ext)
             arc_dir = div_name if division_folder else ""
@@ -1029,25 +1034,44 @@ def _generate_zip_common(task_id: str, mode: str, filter_divisions: list = None,
                     df = _restore_original_headers(df, stored_headers, forward_map)
 
                 df = ensure_dob_format(df)
+
+                # Apply column_order if provided
+                if column_order:
+                    ordered = [c for c in column_order if c in df.columns]
+                    if ordered:
+                        remaining = [c for c in df.columns if c not in ordered]
+                        df = df[ordered + remaining]
+
+                # Sort data within file by district/upazila for multi-region files
+                sort_cols = []
+                if group_by == "division":
+                    sort_cols = ["district", "upazila"]
+                elif group_by == "district":
+                    sort_cols = ["upazila"]
+                if sort_cols:
+                    existing_sort = [c for c in sort_cols if c in df.columns]
+                    if existing_sort:
+                        df = df.sort_values(existing_sort).reset_index(drop=True)
+
+                base_name = os.path.splitext(file_name)[0]
                 if export_fmt == "xlsx":
-                    tested_path = os.path.join(temp_dir, f"{safe_base}_tested.xlsx")
+                    tested_path = os.path.join(temp_dir, file_name)
                     _write_checked_xlsx(df, invalid_mask, tested_path, warning_mask=warning_mask)
-                    arc_name = f"{arc_dir}/{safe_base}_tested.xlsx" if arc_dir else f"{safe_base}_tested.xlsx"
+                    arc_name = f"{arc_dir}/{file_name}" if arc_dir else file_name
                     results.append((tested_path, arc_name))
                 elif export_fmt == "csv":
-                    csv_path = os.path.join(temp_dir, f"{safe_base}_tested.csv")
+                    csv_path = os.path.join(temp_dir, file_name)
                     _write_csv_file(df, csv_path)
-                    arc_name = f"{arc_dir}/{safe_base}_tested.csv" if arc_dir else f"{safe_base}_tested.csv"
+                    arc_name = f"{arc_dir}/{file_name}" if arc_dir else file_name
                     results.append((csv_path, arc_name))
                 else:  # pdf
-                    pdf_path = os.path.join(temp_dir, f"{safe_base}_tested.pdf")
                     pdf_stats = {"total_rows": len(df), "issues": len(df[invalid_mask]) if invalid_mask else 0, "converted_nid": 0}
                     pdf_geo = {"division": unit_data.get("division",""), "district": unit_data.get("district",""), "upazila": unit_data.get("upazila","")}
                     pdf_path = generate_pdf_report(df, pdf_stats, additional_columns=list(df.columns),
-                                                   output_dir=temp_dir, original_filename=f"{safe_base}_tested",
+                                                   output_dir=temp_dir, original_filename=base_name,
                                                    geo=pdf_geo, invalid_only=False)
                     if pdf_path:
-                        arc_name = f"{arc_dir}/{safe_base}_tested.pdf" if arc_dir else f"{safe_base}_tested.pdf"
+                        arc_name = f"{arc_dir}/{file_name}" if arc_dir else file_name
                         results.append((pdf_path, arc_name))
 
                 # Also include the invalid PDF report in the ZIP
@@ -1067,17 +1091,27 @@ def _generate_zip_common(task_id: str, mode: str, filter_divisions: list = None,
                             idf_pdf["Message"] = "Invalid record"
                         pdf_stats = {"total_rows": len(idf_pdf), "issues": len(idf_pdf), "converted_nid": 0}
                         pdf_geo = {"division": unit_data["division"], "district": unit_data["district"], "upazila": unit_data["upazila"]}
-                        pdf_path = generate_pdf_report(idf_pdf, pdf_stats, additional_columns=[], output_dir=temp_dir, original_filename=f"{safe_base}_Invalid", geo=pdf_geo, invalid_only=True)
+                        invalid_report_name = f"{base_name}_Invalid.pdf"
+                        pdf_path = generate_pdf_report(idf_pdf, pdf_stats, additional_columns=[], output_dir=temp_dir, original_filename=f"{base_name}_Invalid", geo=pdf_geo, invalid_only=True)
                         if pdf_path:
-                            arc_name = f"{arc_dir}/{safe_base}_Invalid_Report.pdf" if arc_dir else f"{safe_base}_Invalid_Report.pdf"
+                            arc_name = f"{arc_dir}/{invalid_report_name}" if arc_dir else invalid_report_name
                             results.append((pdf_path, arc_name))
                     except Exception as e:
-                        logger.warning(f"PDF generation skipped for {safe_base}: {e}")
+                        logger.warning(f"PDF generation skipped for {base_name}: {e}")
 
             elif mode == "valid":
                 if u_v is None or (hasattr(u_v, 'empty') and u_v.empty): return None
                 export_df = _prepare_export_df(u_v, export_columns)
                 export_df = ensure_dob_format(export_df)
+                sort_cols = []
+                if group_by == "division":
+                    sort_cols = ["District", "Upazila"]
+                elif group_by == "district":
+                    sort_cols = ["Upazila"]
+                if sort_cols:
+                    existing_sort = [c for c in sort_cols if c in export_df.columns]
+                    if existing_sort:
+                        export_df = export_df.sort_values(existing_sort).reset_index(drop=True)
                 ext = ".csv" if export_fmt == "csv" else ".pdf" if export_fmt == "pdf" else ".xlsx"
                 t_file = os.path.join(temp_dir, file_name.replace(".xlsx", ext))
                 written = _write_export_file(export_df, t_file, export_fmt, "Valid Records", is_valid=True, columns=export_columns)
@@ -1087,7 +1121,17 @@ def _generate_zip_common(task_id: str, mode: str, filter_divisions: list = None,
 
             elif mode == "invalid":
                 if u_i is None or (hasattr(u_i, 'empty') and u_i.empty): return None
-                u_i_formatted = ensure_dob_format(u_i)
+                u_i_formatted = _prepare_export_df(u_i, export_columns)
+                u_i_formatted = ensure_dob_format(u_i_formatted)
+                sort_cols = []
+                if group_by == "division":
+                    sort_cols = ["District", "Upazila"]
+                elif group_by == "district":
+                    sort_cols = ["Upazila"]
+                if sort_cols:
+                    existing_sort = [c for c in sort_cols if c in u_i_formatted.columns]
+                    if existing_sort:
+                        u_i_formatted = u_i_formatted.sort_values(existing_sort).reset_index(drop=True)
                 ext = ".csv" if export_fmt == "csv" else ".pdf" if export_fmt == "pdf" else ".xlsx"
                 t_file = os.path.join(temp_dir, file_name.replace(".xlsx", ext))
                 written = _write_export_file(u_i_formatted, t_file, export_fmt, "Invalid Records", is_valid=False, columns=export_columns)
@@ -1281,31 +1325,73 @@ def _generate_zip_common(task_id: str, mode: str, filter_divisions: list = None,
                                 except: pass
 
                     # Update progress
-                    task.progress = int((processed / total_entries) * 100)
+                    if total_entries > 0:
+                        task.progress = int((processed / total_entries) * 100)
+                    else:
+                        task.progress = 0
                     task.message = f"Processed {processed}/{total_entries} upazilas..."
                     db.commit()
 
-            # ── Division-level grouping (second pass) ──
-            if group_by == "division" and div_grouped:
-                task.message = "Generating division-level files..."
-                db.commit()
-                for div_name, div_entries in div_grouped.items():
-                    div_uids = [e.upazila_id for e in div_entries if e.upazila_id]
+                # ── Division-level grouping (second pass) ──
+                if group_by == "division" and div_grouped:
+                    task.message = "Generating division-level files..."
+                    db.commit()
+                    for div_name, div_entries in div_grouped.items():
+                        div_uids = [e.upazila_id for e in div_entries if e.upazila_id]
+                        if mode == "checked":
+                            all_raw_v = []
+                            all_raw_i = []
+                            if div_uids:
+                                raw_v = db.execute(
+                                    text("SELECT data FROM valid_records WHERE upazila_id = ANY(:uids)"),
+                                    {"uids": div_uids}
+                                ).fetchall()
+                                all_raw_v = [_parse(d) for (d,) in raw_v]
+                                raw_i = db.execute(
+                                    text("SELECT data FROM invalid_records WHERE upazila_id = ANY(:uids)"),
+                                    {"uids": div_uids}
+                                ).fetchall()
+                                all_raw_i = [_parse(d) for (d,) in raw_i]
+                            unit_data = {"division": div_name, "district": "", "upazila": f"{div_name}_Division", "upazila_id": None, "column_headers": None}
+                            for fut in [executor.submit(process_upazila_files, unit_data, all_raw_v, all_raw_i)]:
+                                file_res = fut.result()
+                                if file_res:
+                                    for f_path, arc_name in file_res:
+                                        zipf.write(f_path, arcname=arc_name)
+                                        try: os.remove(f_path)
+                                        except: pass
+                        else:
+                            div_v_df = get_live_records_df(db, is_invalid=False, upazila_ids=div_uids) if need_valid else pd.DataFrame()
+                            div_i_df = get_live_records_df(db, is_invalid=True, upazila_ids=div_uids) if need_invalid else pd.DataFrame()
+                            unit_data = {"division": div_name, "district": "", "upazila": f"{div_name}_Division", "upazila_id": None, "column_headers": None}
+                            for fut in [executor.submit(process_upazila_files, unit_data, div_v_df, div_i_df)]:
+                                file_res = fut.result()
+                                if file_res:
+                                    for f_path, arc_name in file_res:
+                                        zipf.write(f_path, arcname=arc_name)
+                                        try: os.remove(f_path)
+                                        except: pass
+    
+                # ── Country-wide single file (group_by none) ──
+                if group_by == "none" and all_entries:
+                    task.message = "Generating country-wide single file..."
+                    db.commit()
+                    all_uids = [e.upazila_id for e in all_entries if e.upazila_id]
                     if mode == "checked":
                         all_raw_v = []
                         all_raw_i = []
-                        if div_uids:
+                        if all_uids:
                             raw_v = db.execute(
                                 text("SELECT data FROM valid_records WHERE upazila_id = ANY(:uids)"),
-                                {"uids": div_uids}
+                                {"uids": all_uids}
                             ).fetchall()
                             all_raw_v = [_parse(d) for (d,) in raw_v]
                             raw_i = db.execute(
                                 text("SELECT data FROM invalid_records WHERE upazila_id = ANY(:uids)"),
-                                {"uids": div_uids}
+                                {"uids": all_uids}
                             ).fetchall()
                             all_raw_i = [_parse(d) for (d,) in raw_i]
-                        unit_data = {"division": div_name, "district": "", "upazila": f"{div_name}_Division", "upazila_id": None, "column_headers": None}
+                        unit_data = {"division": "Country", "district": "", "upazila": "Country_Wide", "upazila_id": None, "column_headers": None}
                         for fut in [executor.submit(process_upazila_files, unit_data, all_raw_v, all_raw_i)]:
                             file_res = fut.result()
                             if file_res:
@@ -1314,55 +1400,16 @@ def _generate_zip_common(task_id: str, mode: str, filter_divisions: list = None,
                                     try: os.remove(f_path)
                                     except: pass
                     else:
-                        div_v_df = get_live_records_df(db, is_invalid=False, upazila_ids=div_uids) if need_valid else pd.DataFrame()
-                        div_i_df = get_live_records_df(db, is_invalid=True, upazila_ids=div_uids) if need_invalid else pd.DataFrame()
-                        unit_data = {"division": div_name, "district": "", "upazila": f"{div_name}_Division", "upazila_id": None, "column_headers": None}
-                        for fut in [executor.submit(process_upazila_files, unit_data, div_v_df, div_i_df)]:
+                        none_v_df = get_live_records_df(db, is_invalid=False, upazila_ids=all_uids) if need_valid else pd.DataFrame()
+                        none_i_df = get_live_records_df(db, is_invalid=True, upazila_ids=all_uids) if need_invalid else pd.DataFrame()
+                        unit_data = {"division": "Country", "district": "", "upazila": "Country_Wide", "upazila_id": None, "column_headers": None}
+                        for fut in [executor.submit(process_upazila_files, unit_data, none_v_df if need_valid else pd.DataFrame(), none_i_df if need_invalid else pd.DataFrame())]:
                             file_res = fut.result()
                             if file_res:
                                 for f_path, arc_name in file_res:
                                     zipf.write(f_path, arcname=arc_name)
                                     try: os.remove(f_path)
                                     except: pass
-
-            # ── Country-wide single file (group_by none) ──
-            if group_by == "none" and all_entries:
-                task.message = "Generating country-wide single file..."
-                db.commit()
-                all_uids = [e.upazila_id for e in all_entries if e.upazila_id]
-                if mode == "checked":
-                    all_raw_v = []
-                    all_raw_i = []
-                    if all_uids:
-                        raw_v = db.execute(
-                            text("SELECT data FROM valid_records WHERE upazila_id = ANY(:uids)"),
-                            {"uids": all_uids}
-                        ).fetchall()
-                        all_raw_v = [_parse(d) for (d,) in raw_v]
-                        raw_i = db.execute(
-                            text("SELECT data FROM invalid_records WHERE upazila_id = ANY(:uids)"),
-                            {"uids": all_uids}
-                        ).fetchall()
-                        all_raw_i = [_parse(d) for (d,) in raw_i]
-                    unit_data = {"division": "Country", "district": "", "upazila": "Country_Wide", "upazila_id": None, "column_headers": None}
-                    for fut in [executor.submit(process_upazila_files, unit_data, all_raw_v, all_raw_i)]:
-                        file_res = fut.result()
-                        if file_res:
-                            for f_path, arc_name in file_res:
-                                zipf.write(f_path, arcname=arc_name)
-                                try: os.remove(f_path)
-                                except: pass
-                else:
-                    none_v_df = get_live_records_df(db, is_invalid=False, upazila_ids=all_uids) if need_valid else pd.DataFrame()
-                    none_i_df = get_live_records_df(db, is_invalid=True, upazila_ids=all_uids) if need_invalid else pd.DataFrame()
-                    unit_data = {"division": "Country", "district": "", "upazila": "Country_Wide", "upazila_id": None, "column_headers": None}
-                    for fut in [executor.submit(process_upazila_files, unit_data, none_v_df if need_valid else pd.DataFrame(), none_i_df if need_invalid else pd.DataFrame())]:
-                        file_res = fut.result()
-                        if file_res:
-                            for f_path, arc_name in file_res:
-                                zipf.write(f_path, arcname=arc_name)
-                                try: os.remove(f_path)
-                                except: pass
 
         if not os.path.exists(zip_path) or os.path.getsize(zip_path) < 100:
             if os.path.exists(zip_path): os.remove(zip_path)
@@ -1462,9 +1509,6 @@ def start_selected_zip_task(
     current_user: User = Depends(get_current_user),
 ):
     """Start background task to generate a ZIP for selected divisions/districts/upazilas only."""
-    if not req.divisions and not req.districts and not req.upazila_ids:
-        raise HTTPException(status_code=400, detail="At least one filter (divisions, districts, or upazila_ids) is required")
-
     label_parts = []
     if req.divisions:
         label_parts.append(f"{len(req.divisions)} div")
